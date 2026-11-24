@@ -177,9 +177,7 @@ public:
         ggml_backend_t backend,
         const std::string& weight_prefix                    = "",
         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-        : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {
-        fast_conv2d_enabled = true;  // a VAE's direct 2D convolutions may run as sd.conv2d_f16 (Fugue #382)
-    }
+        : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {}
 
     int get_scale_factor() {
         return sd::vae::spatial_scale(version);
