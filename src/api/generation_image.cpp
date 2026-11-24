@@ -16,6 +16,17 @@ namespace sd::api {
                sd_version_is_z_image(version) || sd_version_is_boogu_image(version);
     }
 
+    // ref_image_args: only "resize_before_vae=true|false" (the name upstream gave it before the DGL
+    // engine, which sizes references in generation_image.cpp); false keeps each reference as it came.
+    static bool keep_reference_size(const char* args) {
+        const std::string value = args ? args : "";
+        if (value.empty() || value == "resize_before_vae=true")
+            return false;
+        if (value == "resize_before_vae=false")
+            return true;
+        throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "ref_image_args supports only resize_before_vae=true or resize_before_vae=false");
+    }
+
     static std::string reference_pixels(GenerationTemplate& request, const sd_tensor_t* tensor, size_t index, bool encode) {
         const auto version = request.definition.version;
         const auto name    = "reference_" + std::to_string(index);
@@ -23,6 +34,7 @@ namespace sd::api {
         int width = int(sd_tensor_dim(tensor, 1)), height = int(sd_tensor_dim(tensor, 2));
         const int target_width = request.values.at("width"), target_height = request.values.at("height");
         const int factor = sd_version_is_qwen_image(version) ? 32 : 16;
+        bool crop_only   = false;
         if (version == VERSION_P_H3_IMAGE || version == VERSION_MINIMAX_H3_IMAGE) {
             const double scale = version == VERSION_P_H3_IMAGE ? std::min(1.0, std::sqrt(double(target_width) * target_height / (double(width) * height))) : double(std::clamp(std::min(width, height), 1024, 2048)) / std::min(width, height);
             width              = std::max(32, int(std::nearbyint(width * scale / 32)) * 32);
@@ -31,6 +43,12 @@ namespace sd::api {
             const double scale = std::min(1.0, 1024.0 / std::max(width, height));
             width              = std::max(factor, int(std::round(width * scale / factor)) * factor);
             height             = std::max(factor, int(std::round(height * scale / factor)) * factor);
+        } else if (version != VERSION_ANIMA && !sd_version_is_pid(version) && keep_reference_size(request.image.fugue.ref_image_args)) {
+            // As each came, cut from the middle down to the VAE's multiple (the VAE would rescale it
+            // otherwise); a side under one multiple stays.
+            crop_only = true;
+            width     = width >= factor ? width / factor * factor : width;
+            height    = height >= factor ? height / factor * factor : height;
         } else if (version != VERSION_ANIMA && !sd_version_is_pid(version)) {
             if (sd_version_is_llada_image(version) || sd_version_is_mage_flow(version) || (version == VERSION_FIBO2 && request.image.ref_images_count == 1)) {
                 width  = target_width;
@@ -46,11 +64,12 @@ namespace sd::api {
                 }
             }
         }
+        LOG_INFO("reference %zu: %dx%d -> %dx%d before the VAE", index, int(sd_tensor_dim(tensor, 1)), int(sd_tensor_dim(tensor, 2)), width, height);
         const auto pixels        = name + "_pixels";
-        const auto scale         = std::max(double(width) / sd_tensor_dim(tensor, 1), double(height) / sd_tensor_dim(tensor, 2));
+        const auto scale         = crop_only ? 1.0 : std::max(double(width) / sd_tensor_dim(tensor, 1), double(height) / sd_tensor_dim(tensor, 2));
         const auto resize_width  = int(std::ceil(sd_tensor_dim(tensor, 1) * scale));
         const auto resize_height = int(std::ceil(sd_tensor_dim(tensor, 2) * scale));
-        request.fields["references"] += request.render("image_reference", {{"name", name}, {"channels", request.definition.geometry.image_channels}, {"width", width}, {"height", height}, {"center_crop", version == VERSION_FIBO2}, {"resize_width", resize_width}, {"resize_height", resize_height}, {"crop_x", (resize_width - width) / 2}, {"crop_y", (resize_height - height) / 2}, {"mode", literal(sd_version_is_minimax_h3_image(version) ? "lanczos" : "bilinear")}, {"encode", encode}, {"augment", version == VERSION_MINIMAX_H3_IMAGE}, {"latent", "reference_latent_" + std::to_string(index)}});
+        request.fields["references"] += request.render("image_reference", {{"name", name}, {"channels", request.definition.geometry.image_channels}, {"width", width}, {"height", height}, {"center_crop", version == VERSION_FIBO2 || crop_only}, {"crop_only", crop_only}, {"resize_width", resize_width}, {"resize_height", resize_height}, {"crop_x", (resize_width - width) / 2}, {"crop_y", (resize_height - height) / 2}, {"mode", literal(sd_version_is_minimax_h3_image(version) ? "lanczos" : "bilinear")}, {"encode", encode}, {"augment", version == VERSION_MINIMAX_H3_IMAGE}, {"latent", "reference_latent_" + std::to_string(index)}});
         return pixels;
     }
 

@@ -460,6 +460,7 @@ static void add_fugue_specs(std::vector<ParamSpec>& specs) {
     fugue.string("fugue.stop_after", &sd::FugueStageConfig::stop_after);
     fugue.string("fugue.init_video", &sd::FugueStageConfig::init_video);
     fugue.boolean("fugue.soft_mask", &sd::FugueStageConfig::soft_mask);
+    fugue.string("ref_image_args", &sd::FugueStageConfig::ref_image_args);
 }
 
 static void add_tiling_specs(std::vector<ParamSpec>& specs) {

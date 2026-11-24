@@ -157,6 +157,9 @@ namespace sd {
         // Differential diffusion (arXiv 2306.00950): an image mask keeps its values between 0 and 1
         // and sets how late each latent cell is released from the start latent. Off: upstream.
         bool soft_mask{};
+        // How reference images are sized before the VAE: "" (the library's own: at most a megapixel
+        // and the output's area, a multiple of 16) or "resize_before_vae=false" (each as it came).
+        const char* ref_image_args{};
     };
 
     struct ImageConfig {
