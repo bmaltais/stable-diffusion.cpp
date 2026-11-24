@@ -1,5 +1,8 @@
 #include "dgl/models/vae.h"
 
+#include <functional>
+#include <string_view>
+
 #include "model/vae/geometry.hpp"
 
 #include "core/backend_fit.h"
@@ -60,7 +63,37 @@ namespace sd::dgl::models {
         return runtime_.build_variant(base.runtime_, std::move(loader));
     }
 
+    bool VAE::encode_is_deterministic() const {
+        // The FLUX.2 VAE's latent is its output as it is: no posterior sample, so no RNG.
+        return !tae_ && sd_version_uses_flux2_vae(version());
+    }
+
+    std::string VAE::encode_cache_key(const Tensor<float>& input, bool posterior_mode) const {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(input.data());
+        const size_t size = static_cast<size_t>(input.numel()) * sizeof(float);
+        uint64_t fnv      = 1469598103934665603ull;
+        for (size_t i = 0; i < size; ++i)
+            fnv = (fnv ^ bytes[i]) * 1099511628211ull;
+        const size_t other = std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char*>(bytes), size));
+        std::string key    = std::to_string(fnv) + ":" + std::to_string(other) + ":";
+        for (auto dim : input.shape())
+            key += std::to_string(dim) + "x";
+        const auto& t = vae_tiling_params;
+        key += ":" + std::to_string(posterior_mode) + std::to_string(circular_x) + std::to_string(circular_y) + ":" +
+               std::to_string(t.enabled) + std::to_string(t.temporal_tiling) + "," + std::to_string(t.tile_size_w) + "," +
+               std::to_string(t.tile_size_h) + "," + std::to_string(t.target_overlap) + "," + std::to_string(t.rel_size_w) + "," +
+               std::to_string(t.rel_size_h) + "," + (t.extra_tiling_args ? t.extra_tiling_args : "");
+        return key;
+    }
+
+    void VAE::clear_encode_cache() {
+        std::lock_guard<std::mutex> lock(encode_cache_mutex_);
+        encode_cache_.clear();
+        encode_cache_bytes_ = 0;
+    }
+
     bool VAE::build_runners() {
+        clear_encode_cache();
         auto ctx              = runtime_.model_build_context();
         ctx.params.vae_format = format_;
         first_stage_model     = uses_tae() ? component_builders::build_tae_runner(ctx, decode_only_)
@@ -139,6 +172,34 @@ namespace sd::dgl::models {
     sd::Tensor<float> VAE::encode_vae_latents(const sd::Tensor<float>& x, bool posterior_mode, const std::shared_ptr<RNG>& rng) {
         if (decode_only_)
             throw std::runtime_error("this TAE was loaded with decode_only and cannot encode");
+        const bool cached = encode_is_deterministic();
+        const std::string key = cached ? encode_cache_key(x, posterior_mode) : std::string();
+        if (cached) {
+            std::lock_guard<std::mutex> lock(encode_cache_mutex_);
+            for (auto it = encode_cache_.begin(); it != encode_cache_.end(); ++it) {
+                if (it->key == key) {
+                    encode_cache_.splice(encode_cache_.begin(), encode_cache_, it);
+                    LOG_DEBUG("vae_encode: the same pixels were encoded before, reusing their latent");
+                    return encode_cache_.front().latents;
+                }
+            }
+        }
+        auto latents = encode_vae_latents_uncached(x, posterior_mode, rng);
+        if (cached && !latents.empty()) {
+            constexpr size_t max_entries = 32, max_bytes = size_t(256) << 20;
+            const size_t bytes = static_cast<size_t>(latents.numel()) * sizeof(float);
+            std::lock_guard<std::mutex> lock(encode_cache_mutex_);
+            encode_cache_.push_front({key, latents});
+            encode_cache_bytes_ += bytes;
+            while (encode_cache_.size() > max_entries || encode_cache_bytes_ > max_bytes) {
+                encode_cache_bytes_ -= static_cast<size_t>(encode_cache_.back().latents.numel()) * sizeof(float);
+                encode_cache_.pop_back();
+            }
+        }
+        return latents;
+    }
+
+    sd::Tensor<float> VAE::encode_vae_latents_uncached(const sd::Tensor<float>& x, bool posterior_mode, const std::shared_ptr<RNG>& rng) {
         report_run_progress("vae_encode");
         // Qwen 2.1 expands each vision slot into four reference latent tokens.
         const auto alignment = version() == VERSION_QWEN_IMAGE_2_1 ? 32 : get_vae_scale_factor();

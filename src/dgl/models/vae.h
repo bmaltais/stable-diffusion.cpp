@@ -1,6 +1,11 @@
 #ifndef __SD_DGL_MODELS_VAE_H__
 #define __SD_DGL_MODELS_VAE_H__
 
+#include <cstdint>
+#include <list>
+#include <mutex>
+#include <string>
+
 #include "config.h"
 #include "core/tensor.hpp"
 #include "dgl/models/fwd.h"
@@ -19,6 +24,23 @@ namespace sd::dgl::models {
 
         bool refresh_weights() override { return runtime_.refresh_weights(); }
         bool attach_loras() override { return runtime_.attach_loras(); }
+        // A LoRA makes a model variant of its own, so only changed files (refresh_weights) or a rebuild
+        // change this model's weights.
+        void invalidate_cached_state() override { clear_encode_cache(); }
+
+        // Encodes of the same pixels are kept while the model lives (Fugue #382: an edit's reference
+        // pictures are encoded again for every seed). Only an encode that does not depend on the RNG
+        // is kept; the key is the input's content (two hashes), shape, posterior and tiling.
+        struct EncodeCacheEntry {
+            std::string key;
+            Tensor<float> latents;
+        };
+        std::list<EncodeCacheEntry> encode_cache_;  // most recently used first
+        size_t encode_cache_bytes_ = 0;
+        std::mutex encode_cache_mutex_;
+        bool encode_is_deterministic() const;
+        std::string encode_cache_key(const Tensor<float>& input, bool posterior_mode) const;
+        void clear_encode_cache();
         bool build_variant(const Model& source, ModelLoader loader) override;
 
         bool build_runners();
@@ -46,6 +68,7 @@ namespace sd::dgl::models {
         int align_video_frames(int frames);
         void validate_vae_latent(const Tensor<float>& latent) const;
         Tensor<float> encode_vae_latents(const Tensor<float>& input, bool posterior_mode, const std::shared_ptr<RNG>& rng);
+        Tensor<float> encode_vae_latents_uncached(const Tensor<float>& input, bool posterior_mode, const std::shared_ptr<RNG>& rng);
         Tensor<float> vae_to_dit_latents(const Tensor<float>& latent);
         Tensor<float> dit_to_vae_latents(const Tensor<float>& latent);
         Tensor<float> decode_vae_latents(const Tensor<float>& latent, bool decode_video);
