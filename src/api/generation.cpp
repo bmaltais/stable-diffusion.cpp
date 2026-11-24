@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <random>
 
+#include "api/fugue_stage.h"
 #include "api/generation_program.h"
 #include "api/result.h"
 #include "api/tensor.h"
@@ -229,6 +230,8 @@ namespace sd::api {
             return status;
         context.check_cancelled();
         const auto seed = resolved_seed(config.image.seed);
+        if (fugue_stage::wanted(config.image))
+            return fugue_stage::run_image(context, snapshot, config, seed, out);
         auto result     = std::make_unique<sd_result_t>();
         for (int i = 0; i < config.image.batch_count; ++i) {
             if (context.cancellation.load() == SD_CANCEL_NEW_LATENTS)
@@ -251,6 +254,8 @@ namespace sd::api {
         const auto status = resolve(snapshot.get(), Video, config);
         if (status != SD_STATUS_OK)
             return status;
+        if (fugue_stage::wanted(config.video))
+            return fugue_stage::run_video(context, snapshot, config, resolved_seed(config.video.seed), out);
         auto program = video_program(context, config.video, snapshot.get(), resolved_seed(config.video.seed));
         auto value   = execute_program(context, program);
         auto result  = std::make_unique<sd_result_t>();

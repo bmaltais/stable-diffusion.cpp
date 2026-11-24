@@ -84,6 +84,7 @@ namespace sd::dgl {
             options.denoise_mask = &float_tensor(args, "denoise_mask");
         }
         options.mask_input = get_bool(args, "mask_input");
+        options.soft_mask  = args.count("soft_mask") && get_bool(args, "soft_mask");
         options.extra_args = get_string(args, "extra_args");
         if (args.count("finish"))
             options.finish = get_bool(args, "finish");

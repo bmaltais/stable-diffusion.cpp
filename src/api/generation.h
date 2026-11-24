@@ -65,6 +65,7 @@ namespace sd::api {
     struct GenerationProgram {
         std::string source;
         dgl::Values inputs;
+        std::string vae_options;  // Fugue's stage split: the VAE run options of this program
     };
 
     dgl::Value execute_program(GenerationContext& context, const GenerationProgram& program, const dgl::Graph* compiled = nullptr);

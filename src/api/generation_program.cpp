@@ -319,6 +319,7 @@ namespace sd::api {
         fields["variables"] = variables(values);
         fields["inputs"]    = input_names(program);
         program.source      = request.render(fields.at("entry"));
+        program.vae_options = axes;
         return program;
     }
 

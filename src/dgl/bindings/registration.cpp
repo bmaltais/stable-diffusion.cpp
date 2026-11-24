@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "core/util.h"
+#include "api/fugue_stage.h"
 #include "dgl/bindings/audio.h"
 #include "dgl/bindings/component_loader.h"
 #include "dgl/bindings/components.h"
@@ -616,6 +617,7 @@ namespace sd::dgl {
             required("start", Kind::Tensor), required("sigmas", Kind::Tensor), required("predict", Kind::Predictor),
             required("rng", Kind::Rng), choice("method", std::move(sample_methods), "euler"), number("eta", 0, 100, 1),
             optional("base", Kind::Tensor), optional("denoise_mask", Kind::Tensor), optional("mask_input", Kind::Boolean, false),
+            optional("soft_mask", Kind::Boolean, false),
             optional("extra_args", Kind::String, ""),
             optional("finish", Kind::Boolean),
             optional("cache", Kind::Dict), optional("observer", Kind::SamplingObserver)};
@@ -742,6 +744,7 @@ namespace sd::dgl {
         register_latent_operations(registry);
         register_video_restoration_operations(registry);
         register_detailer_operations(registry);
+        api::fugue_stage::register_operations(registry);
         for (const auto* name : {"latent_shape", "audio_latent_shape", "make_sigmas", "t_to_sigma", "denoiser_scalings", "relayvsr::latent_shape",
                                  "add_noise", "vae_to_dit_latents", "dit_to_vae_latents", "list::replace", "zero_out"})
             if (auto found = registry.find(name); found != registry.end())

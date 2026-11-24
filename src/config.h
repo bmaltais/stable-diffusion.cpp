@@ -140,6 +140,25 @@ namespace sd {
         int custom_sigmas_count{};
     };
 
+    // Fugue's stage split (api/fugue_stage.h): files generate_images and generate_video read in
+    // place of a stage or write after one, and the stage they stop after ("init", "cond" or
+    // "sample"; a video's "init" is the encode of init_video).
+    struct FugueStageConfig {
+        const char* init_latent_in{};
+        const char* init_latent_out{};
+        const char* cond_in{};
+        const char* cond_out{};
+        const char* latent_in{};
+        const char* latent_out{};
+        const char* stop_after{};
+        // A video to redraw (video-to-video): a YUV4MPEG2 file of the request's size and length,
+        // which the video program encodes with the VAE. Off: upstream.
+        const char* init_video{};
+        // Differential diffusion (arXiv 2306.00950): an image mask keeps its values between 0 and 1
+        // and sets how late each latent cell is released from the start latent. Off: upstream.
+        bool soft_mask{};
+    };
+
     struct ImageConfig {
         const sd_lora_t* loras{};
         uint32_t lora_count{};
@@ -165,6 +184,7 @@ namespace sd {
         bool circular_x{};
         bool circular_y{};
         enum sd_control_type_t control_type {};
+        sd::FugueStageConfig fugue{};
 
         ImageConfig();
     };
@@ -200,6 +220,7 @@ namespace sd {
         HiresConfig hires{};
         bool circular_x{};
         bool circular_y{};
+        sd::FugueStageConfig fugue{};
 
         VideoConfig();
     };

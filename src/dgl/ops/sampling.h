@@ -29,6 +29,7 @@ namespace sd::dgl {
             const sd::Tensor<float>* base         = nullptr;
             const sd::Tensor<float>* denoise_mask = nullptr;
             bool mask_input                       = false;
+            bool soft_mask                        = false;  // Fugue: differential diffusion
             std::string extra_args;
             std::optional<bool> finish;
             std::optional<CacheConfig> cache;

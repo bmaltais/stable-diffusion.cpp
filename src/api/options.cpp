@@ -447,6 +447,21 @@ static void add_hires_specs(std::vector<ParamSpec>& specs) {
     hires.array("hires.sigmas", &sd::HiresConfig::custom_sigmas, &sd::HiresConfig::custom_sigmas_count, valid_sigmas, "hires sigmas require at least two strictly decreasing nonnegative entries ending in zero, or an empty array");
 }
 
+static void add_fugue_specs(std::vector<ParamSpec>& specs) {
+    using namespace sd::api;
+    ParamGroup fugue(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.fugue, config.video.fugue); });
+
+    fugue.string("fugue.init_latent_in", &sd::FugueStageConfig::init_latent_in);
+    fugue.string("fugue.init_latent_out", &sd::FugueStageConfig::init_latent_out);
+    fugue.string("fugue.cond_in", &sd::FugueStageConfig::cond_in);
+    fugue.string("fugue.cond_out", &sd::FugueStageConfig::cond_out);
+    fugue.string("fugue.latent_in", &sd::FugueStageConfig::latent_in);
+    fugue.string("fugue.latent_out", &sd::FugueStageConfig::latent_out);
+    fugue.string("fugue.stop_after", &sd::FugueStageConfig::stop_after);
+    fugue.string("fugue.init_video", &sd::FugueStageConfig::init_video);
+    fugue.boolean("fugue.soft_mask", &sd::FugueStageConfig::soft_mask);
+}
+
 static void add_tiling_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
     ParamGroup tiling(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.vae_tiling_params, config.video.vae_tiling_params); });
@@ -489,6 +504,7 @@ static std::vector<ParamSpec> make_specs() {
     add_sampling_specs(specs);
     add_cache_specs(specs);
     add_hires_specs(specs);
+    add_fugue_specs(specs);
     add_tiling_specs(specs);
     add_postprocess_specs(specs);
     return specs;

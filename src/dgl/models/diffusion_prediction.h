@@ -1,6 +1,7 @@
 #ifndef __SD_DGL_MODELS_DIFFUSION_PREDICTION_H__
 #define __SD_DGL_MODELS_DIFFUSION_PREDICTION_H__
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -59,6 +60,7 @@ namespace sd::dgl::models {
         float lookahead_sigma                       = std::numeric_limits<float>::quiet_NaN();
         float semantic_sigma                        = std::numeric_limits<float>::quiet_NaN();
         bool mask_input                             = false;
+        bool soft_mask                              = false;
         sd_sample::SampleStepCacheDispatcher* cache = nullptr;
         std::vector<const ControlBinding*> controls;
         std::function<UNetControls(const Tensor<float>&, const Tensor<float>&, const SDCondition&)> compute_controls;
@@ -68,8 +70,22 @@ namespace sd::dgl::models {
         uint64_t qwen_prefix_id                             = 0;
 
         void blend_mask(Tensor<float>& latent) const {
-            if (!mask.empty())
+            if (mask.empty())
+                return;
+            if (!soft_mask || schedule_size < 2) {
                 latent = latent * mask + base * (1.f - mask);
+                return;
+            }
+            // fugue.soft_mask, differential diffusion (arXiv 2306.00950, Algorithm 1): the mask is a
+            // change map, and a cell with value m is held until the step where the fraction of
+            // steps left, t / k, falls below m. The paper's map is 1 for no change and its test is
+            // map < (k - t) / k, which is m > t / k for m = 1 - map. Step i is t = k - 1 - i.
+            const int steps       = static_cast<int>(schedule_size) - 1;
+            const float threshold = static_cast<float>(steps - 1 - std::min(index, steps - 1)) / steps;
+            sd::Tensor<float> released = mask;
+            for (float& value : released.values())
+                value = value > threshold ? 1.f : 0.f;
+            latent = latent * released + base * (1.f - released);
         }
     };
 

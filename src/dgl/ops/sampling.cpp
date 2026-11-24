@@ -74,6 +74,7 @@ namespace sd::dgl::ops {
             step.solver_index   = index;
             step.completes_step = index > 0 || (terminal_zero && index < 0 && step.index == static_cast<int>(sigmas.size() - 1));
             step.mask_input     = options.mask_input;
+            step.soft_mask      = options.soft_mask;
             const auto target   = static_cast<size_t>(step.index);
             if (target < sigmas.size())
                 step.target_sigma = sigmas[target];
