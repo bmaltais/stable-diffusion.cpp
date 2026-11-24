@@ -110,6 +110,17 @@ struct SDSageAttentionParams {
 
 ggml_ext_op_t sd_ggml_sage_attn_op();
 
+// Group norm and its affine in one op (Fugue #382): inputs x [W, H, C, N] F32, gamma and beta [C]
+// F32; the output is x's shape. A kernel that runs it computes ggml's GROUP_NORM, MUL, ADD values.
+struct SDGroupNormParams {
+    int32_t groups;
+    float eps;
+};
+
+ggml_ext_op_t sd_ggml_group_norm_op();
+
+bool sd_ggml_group_norm_describe(const ggml_tensor* node, SDGroupNormParams* params);
+
 bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* params);
 
 struct SDSolAttentionParams {

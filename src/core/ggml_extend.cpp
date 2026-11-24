@@ -818,6 +818,17 @@ ggml_tensor* ggml_ext_group_norm(GGMLRunnerContext* runner_ctx,
                                  int num_groups,
                                  float eps) {
     auto ctx = runner_ctx->ggml_ctx;
+#ifndef SD_USE_UPSTREAM_GGML
+    // One op where the backend has a kernel for it (Fugue #382: CUDA), with ggml's values.
+    if (ggml_n_dims(x) >= 3 && w != nullptr && b != nullptr && x->type == GGML_TYPE_F32 && ggml_is_contiguous(x) &&
+        w->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && runner_ctx->backend != nullptr) {
+        const SDGroupNormParams params = {num_groups, eps};
+        ggml_tensor* inputs[]          = {x, w, b};
+        auto* fused                    = ggml_ext_op_create(ctx, sd_ggml_group_norm_op(), inputs, 3, &params);
+        if (fused != nullptr && ggml_backend_supports_op(runner_ctx->backend, fused))
+            return fused;
+    }
+#endif
     if (ggml_n_dims(x) >= 3 && w != nullptr && b != nullptr) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], 1);
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);

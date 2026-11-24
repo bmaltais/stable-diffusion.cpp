@@ -27,6 +27,7 @@ void sd_ggml_rotate_convrot(float* values, int64_t width, int group) {
 #include "ggml-ext.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -446,6 +447,43 @@ bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* 
     ggml_ext_tensor_desc output;
     const auto* attributes = ggml_ext_op_attributes(node);
     if (!sage_attn_infer(node->src, 3, attributes, &output) || node->type != output.type || std::memcmp(node->ne, output.ne, sizeof(output.ne)))
+        return false;
+    std::memcpy(params, attributes, sizeof(*params));
+    return true;
+}
+
+static bool group_norm_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (count != 3 || !attributes)
+        return false;
+    SDGroupNormParams params;
+    std::memcpy(&params, attributes, sizeof(params));
+    const auto* x = inputs[0];
+    if (!x || x->type != GGML_TYPE_F32 || !ggml_is_contiguous(x) || params.groups <= 0 || !(params.eps >= 0.f) ||
+        x->ne[2] % params.groups || ggml_nelements(x) > INT_MAX)
+        return false;
+    for (int i = 1; i < 3; ++i)
+        if (!inputs[i] || inputs[i]->type != GGML_TYPE_F32 || !ggml_is_contiguous(inputs[i]) || ggml_nelements(inputs[i]) != x->ne[2])
+            return false;
+    *out = {GGML_TYPE_F32, {x->ne[0], x->ne[1], x->ne[2], x->ne[3]}};
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_group_norm_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.group_norm_affine.v1", sizeof(SDGroupNormParams), group_norm_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_group_norm_describe(const ggml_tensor* node, SDGroupNormParams* params) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_group_norm_op() || node->src[3] || !ggml_is_contiguous(node))
+        return false;
+    ggml_ext_tensor_desc output;
+    const auto* attributes = ggml_ext_op_attributes(node);
+    if (!group_norm_infer(node->src, 3, attributes, &output) || node->type != output.type || std::memcmp(node->ne, output.ne, sizeof(output.ne)))
         return false;
     std::memcpy(params, attributes, sizeof(*params));
     return true;
