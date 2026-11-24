@@ -5,6 +5,7 @@
 #include "conditioning/conditioner.hpp"
 #include "core/ggml_tensor_utils.h"
 #include "core/util.h"
+#include "dgl/diagnostic.h"
 #include "dgl/models/component_builders.h"
 #include "dgl/models/component_sources.h"
 #include "dgl/models/control.h"
@@ -407,6 +408,9 @@ namespace sd::dgl::models {
             params.extra = ZImageDiffusionExtra{nullptr, 1.f, &z_image_controls};
         }
         auto result = diffusion_model->compute(n_threads, params);
+        // Name why the model did not run, not the empty shape it left behind.
+        if (result.empty())
+            throw_compute_failure("diffusion model compute failed");
         if (result.shape() != shape) {
             throw std::runtime_error("diffusion output shape " + sd::tensor_shape_to_string(result.shape()) +
                                      " does not match input " + sd::tensor_shape_to_string(shape));

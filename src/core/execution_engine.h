@@ -35,6 +35,18 @@ namespace sd {
         Tensor<float> output;
     };
 
+    // Why the graph computation running on this thread failed, for the error its caller raises:
+    // an empty result alone shows up only later, as a wrong output shape. Each failing step
+    // prepends its own description, so the reason reads from the outermost step to the root
+    // cause. GGMLRunner::compute clears it when an outermost computation starts and keeps a copy
+    // when one fails.
+    struct ComputeFailure {
+        std::string reason;
+        bool out_of_memory = false;
+    };
+    void note_compute_failure(const std::string& step, bool out_of_memory = false);
+    ComputeFailure& current_compute_failure();
+
     class ExecutionSession {
         friend class ExecutionEngine;
         friend class GraphExecution;

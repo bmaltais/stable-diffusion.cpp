@@ -103,10 +103,13 @@ The packed runtime activation tensor contains the I8 activation rows and their f
 - MUSA shares the CUDA-style H256 activation kernels. INT8 GEMM falls back to CPU because the MUSA backend does not advertise INT8 BLAS support.
 - Vulkan provides H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
 
-`--lora-apply-mode auto` selects immediate merging for INT8 tensorwise models
-on the compute backend without row splitting. Use `--lora-apply-mode at_runtime`
-to compute each adapter's correction from the original activation and add it to
-the INT8 linear output.
+`--lora-apply-mode auto` applies adapters to INT8 tensorwise models at runtime:
+each adapter's correction is computed from the original activation and added to
+the INT8 linear output. Use `--lora-apply-mode immediately` to merge them
+instead. An immediate merge keeps an unmerged copy of every affected weight and
+its scales on the compute device next to the resident weights, so an adapter
+that covers most layers of a model loaded on the device needs about twice the
+model's INT8 bytes there.
 
 Immediate mode merges an adapter into INT8 tensorwise weights on first use.
 For convrot weights, sd.cpp rotates the adapter update before adding it to the

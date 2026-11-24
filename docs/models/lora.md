@@ -76,9 +76,9 @@ The example loads `../models/loras/marblesh.safetensors` or
 
 There are two ways to apply LoRA: **immediately** and **at_runtime**. You can specify it using the `--lora-apply-mode` parameter.
 
-The default **auto** mode chooses **immediately** for unquantized and INT8
-tensorwise weights on the compute backend without row splitting. It chooses
-**at_runtime** for other quantized formats, offloaded weights, or row-split
+The default **auto** mode chooses **immediately** for unquantized weights on
+the compute backend without row splitting. It chooses **at_runtime** for
+quantized formats (INT8 tensorwise included), offloaded weights, or row-split
 weights. For scripts, see
 [DGL LoRA combinations](../dgl.md#lora-combinations).
 

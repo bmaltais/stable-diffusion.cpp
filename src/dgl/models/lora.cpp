@@ -16,13 +16,18 @@ namespace sd::dgl::models {
             backends.params_backend(module) != backends.runtime_backend(module))
             return LORA_APPLY_AT_RUNTIME;
 
+        // An immediate INT8 merge keeps an unmerged copy of every target weight and its scale on
+        // the compute device beside the resident params (ModelManager::needs_lora_staging), so a
+        // LoRA covering most of a resident model needs about twice its INT8 bytes there: FLUX.2
+        // Klein 9B with a full LoKr asked 8.3 GB more of a 24 GB card and its merge graph could
+        // not run. Auto takes the runtime path for INT8 tensorwise weights too; `immediately`
+        // still merges them when asked.
         const auto& tensors  = loader.get_tensor_storage_map();
         const bool quantized = std::any_of(tensors.begin(), tensors.end(), [](const auto& entry) {
             const auto& tensor = entry.second;
-            return tensor.w4_convrot_kind ||
-                   (!tensor.is_int8_tensorwise &&
-                    (ggml_is_quantized(tensor.type) ||
-                     (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type))));
+            return tensor.w4_convrot_kind || tensor.is_int8_tensorwise ||
+                   ggml_is_quantized(tensor.type) ||
+                   (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type));
         });
         return quantized ? LORA_APPLY_AT_RUNTIME : LORA_APPLY_IMMEDIATELY;
     }

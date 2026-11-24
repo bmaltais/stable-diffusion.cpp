@@ -268,11 +268,32 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
                                                      bool no_return,
                                                      const std::function<bool()>& read_outputs) {
     last_compute_status_ = GGML_STATUS_FAILED;
+    // A LoRA merge runs its own graph while this one prepares its weights: only the outermost
+    // computation starts a fresh failure reason (sd::ComputeFailure), which stays readable on
+    // this thread after a failed compute returns.
+    static thread_local int compute_depth = 0;
+    if (compute_depth == 0)
+        sd::current_compute_failure() = {};
+    struct FailureGuard {
+        GGMLRunner& runner;
+        explicit FailureGuard(GGMLRunner& runner)
+            : runner(runner) { ++compute_depth; }
+        FailureGuard(const FailureGuard&)            = delete;
+        FailureGuard& operator=(const FailureGuard&) = delete;
+        ~FailureGuard() {
+            --compute_depth;
+            if (runner.last_compute_status_ != GGML_STATUS_SUCCESS && sd::current_compute_failure().reason.empty())
+                sd::note_compute_failure(runner.get_desc() + " compute failed (" + ggml_status_to_string(runner.last_compute_status_) + ")",
+                                         runner.last_compute_status_ == GGML_STATUS_ALLOC_FAILED);
+        }
+    } failure_guard{*this};
     if (graph_active_) {
         LOG_ERROR("%s does not support reentrant graph execution", get_desc().c_str());
+        sd::note_compute_failure(get_desc() + " does not support reentrant graph execution");
         return std::nullopt;
     }
     if (!runner_start()) {
+        sd::note_compute_failure(get_desc() + " could not start");
         runner_end();
         return std::nullopt;
     }
@@ -325,8 +346,10 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
     } catch (const std::bad_alloc&) {
         last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
         LOG_ERROR("%s graph allocation failed", get_desc().c_str());
+        sd::note_compute_failure(get_desc() + " graph allocation failed", true);
     } catch (const std::exception& error) {
         LOG_ERROR("%s graph submission failed: %s", get_desc().c_str(), error.what());
+        sd::note_compute_failure(get_desc() + " graph submission failed: " + error.what());
     }
     return std::nullopt;
 }

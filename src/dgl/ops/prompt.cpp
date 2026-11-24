@@ -4,8 +4,10 @@
 #include <filesystem>
 #include <set>
 #include "conditioning/conditioner.hpp"
+#include "core/execution_engine.h"
 #include "core/file_access.h"
 #include "core/image_tensor.h"
+#include "dgl/diagnostic.h"
 #include "dgl/models/text_encoder.h"
 #include "dgl/ops/image.h"
 #include "dgl/ops/video.h"
@@ -104,9 +106,10 @@ namespace sd::dgl::ops {
         if (!presentations.empty())
             params.minimax_h3_references = &presentations;
         if (params.raw) {
+            sd::current_compute_failure() = {};
             auto condition = model.get_learned_condition(params);
             if (condition.empty())
-                throw std::runtime_error("prompt encoding failed");
+                throw_compute_failure("prompt encoding failed");
             return condition;
         }
         auto prompt = sd::parse_prompt_input(params.text, true);
@@ -148,9 +151,10 @@ namespace sd::dgl::ops {
             params.prompt_input = &prompt;
         if (!params.prompt_input)
             params.text = sd::prompt_input_text(prompt);
+        sd::current_compute_failure() = {};
         auto condition = model.get_learned_condition(params);
         if (condition.empty())
-            throw std::runtime_error("prompt encoding failed");
+            throw_compute_failure("prompt encoding failed");
         return condition;
     }
 }

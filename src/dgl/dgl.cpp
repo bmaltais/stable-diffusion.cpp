@@ -5,10 +5,17 @@
 
 #include "api/api.h"
 #include "context.h"
+#include "core/execution_engine.h"
 #include "diagnostic.h"
 #include "executor.h"
 #include "graph.h"
 #include "result.h"
+
+void sd::dgl::throw_compute_failure(const std::string& what) {
+    const auto& failure = sd::current_compute_failure();
+    throw Error(failure.out_of_memory ? SD_STATUS_OUT_OF_MEMORY : SD_STATUS_GENERATION_FAILED,
+                what + (failure.reason.empty() ? std::string() : ": " + failure.reason));
+}
 
 namespace {
     using namespace sd::dgl;

@@ -1089,6 +1089,7 @@ struct LoraModel : public GGMLRunner {
         const bool success = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs).has_value();
         if (!success) {
             LOG_ERROR("LoRA graph execution failed");
+            sd::note_compute_failure("applying LoRA '" + file_path + "'");
         }
         stat(!warn_unused);
         int8_merged_weights.clear();
