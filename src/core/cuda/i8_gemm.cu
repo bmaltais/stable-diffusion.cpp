@@ -376,15 +376,20 @@ namespace sd_i8_cutlass {
         p.launch         = launch<Types>;
         return true;
     }
+    // Stream-K from 8192 rows was tuned on Ada; on Ampere (sm_80/86) the plain tile order is faster for
+    // every shape measured (Klein 9B edit on an RTX 3090: 13.4 -> 10.3 ms and 25.2 -> 23.9 ms; Fugue #382).
+    static bool use_stream_k(const Plan& p) {
+        return p.rows >= 8192 && !(p.device.major == 8 && p.device.minor < 9);
+    }
     template <class Config>
     static bool configure_tile(Plan& p) {
         if (p.packed_w4)
             return configure_kernel<DenseTypes<Config, false, true>>(p);
         if (p.split)
-            return p.rows >= 8192 ? configure_kernel<GatedTypes<Config, true, true>>(p) : configure_kernel<GatedTypes<Config, false, true>>(p);
+            return use_stream_k(p) ? configure_kernel<GatedTypes<Config, true, true>>(p) : configure_kernel<GatedTypes<Config, false, true>>(p);
         if (p.activation != SDI8GemmActivation::None)
-            return p.rows >= 8192 ? configure_kernel<GatedTypes<Config, true>>(p) : configure_kernel<GatedTypes<Config, false>>(p);
-        return p.rows >= 8192 ? configure_kernel<DenseTypes<Config, true>>(p) : configure_kernel<DenseTypes<Config, false>>(p);
+            return use_stream_k(p) ? configure_kernel<GatedTypes<Config, true>>(p) : configure_kernel<GatedTypes<Config, false>>(p);
+        return use_stream_k(p) ? configure_kernel<DenseTypes<Config, true>>(p) : configure_kernel<DenseTypes<Config, false>>(p);
     }
     static bool configure(Plan& p) {
         // This SiTU shape fits two resident CTAs per SM with the narrower, three-stage tile on Ada.

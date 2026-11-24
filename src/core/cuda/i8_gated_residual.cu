@@ -282,11 +282,16 @@ namespace sd_i8_gated {
         plan.launch           = launch<Types>;
         return true;
     }
+    // Stream-K from 8192 rows was tuned on Ada; on Ampere (sm_80/86) the plain tile order is faster for
+    // every shape measured (Klein 9B edit on an RTX 3090: 13.4 -> 10.3 ms and 25.2 -> 23.9 ms; Fugue #382).
+    static bool use_stream_k(const Operation& op, const Plan& plan) {
+        return op.rows >= 8192 && !(plan.device.major == 8 && plan.device.minor < 9);
+    }
     template <class Config>
     static bool configure(const Operation& op, Plan& plan) {
         if (op.scale != 1.f)
-            return op.rows >= 8192 ? configure<Config, true, true>(op, plan) : configure<Config, true, false>(op, plan);
-        return op.rows >= 8192 ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
+            return use_stream_k(op, plan) ? configure<Config, true, true>(op, plan) : configure<Config, true, false>(op, plan);
+        return use_stream_k(op, plan) ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
     }
     static bool configure(const Operation& op, Plan& plan) {
         if (plan.device.major == 8 && plan.device.minor == 9 && op.scale == 1.f &&
