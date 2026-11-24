@@ -76,7 +76,29 @@ namespace SD_CUDA_NAMESPACE {
             d = index == 0 ? -d : d;
             return __fadd_rn(__fadd_rn(__fadd_rn(a, b), c), d);
         }
-        static __global__ void quantize_convrot(const float* src, int8_t* dst, float* scales, int64_t k, int64_t rows, int64_t dst_stride) {
+        // A row of a quantizer's input: plain, or (Fugue #382) a FLUX single block's linear2 input read in
+        // place, [attention | swiglu(gate, up)], so neither the activation nor the concat is written.
+        struct PlainRows {
+            const float* src;
+            int64_t k;
+            __device__ __forceinline__ float operator()(int64_t row, int64_t i) const { return src[row * k + i]; }
+        };
+        struct SwigluConcatRows {
+            const float* prefix;  // [rows, prefix_k], contiguous
+            const float* gate;    // the activated half of the GLU input
+            const float* up;      // the other half
+            int64_t prefix_k, stride;
+            __device__ __forceinline__ float operator()(int64_t row, int64_t i) const {
+                if (i < prefix_k)
+                    return prefix[row * prefix_k + i];
+                const int64_t j = row * stride + (i - prefix_k);
+                const float x   = gate[j];
+                // ggml's GLU SWIGLU, op_silu(x) * g, written the same way so the values are the same.
+                return (x / (1.0f + expf(-x))) * up[j];
+            }
+        };
+        template <class Rows>
+        static __device__ __forceinline__ void quantize_convrot_row(const Rows& load, int8_t* dst, float* scales, int64_t k, int64_t rows, int64_t dst_stride) {
             constexpr int group_size = 256;
             const int64_t row        = blockIdx.x;
             const int tid            = threadIdx.x;
@@ -84,8 +106,7 @@ namespace SD_CUDA_NAMESPACE {
                 return;
             extern __shared__ float values[];
             __shared__ float maxima[32];
-            const float* src_row = src + row * k;
-            int8_t* dst_row      = dst + row * dst_stride;
+            int8_t* dst_row = dst + row * dst_stride;
             {
                 const int lane = tid % 32;
                 for (int64_t group = tid / 32; group < k / group_size; group += blockDim.x / 32) {
@@ -93,7 +114,7 @@ namespace SD_CUDA_NAMESPACE {
 #pragma unroll
                     for (int j = 0; j < 8; ++j) {
                         const int64_t i   = group * group_size + j * 32 + lane;
-                        const float value = src_row[i];
+                        const float value = load(row, i);
                         v[j]              = value * (1.0f / 16.0f);
                     }
                     // One logical warp owns H256, keeping every butterfly in registers.
@@ -162,6 +183,12 @@ namespace SD_CUDA_NAMESPACE {
                 value      = max(-127, min(127, value));
                 dst_row[i] = (int8_t)value;
             }
+        }
+        static __global__ void quantize_convrot(const float* src, int8_t* dst, float* scales, int64_t k, int64_t rows, int64_t dst_stride) {
+            quantize_convrot_row(PlainRows{src, k}, dst, scales, k, rows, dst_stride);
+        }
+        static __global__ void quantize_convrot_swiglu_concat(SwigluConcatRows load, int8_t* dst, float* scales, int64_t k, int64_t rows, int64_t dst_stride) {
+            quantize_convrot_row(load, dst, scales, k, rows, dst_stride);
         }
 
         template <typename Input>
@@ -646,6 +673,7 @@ namespace SD_CUDA_NAMESPACE {
             SDI8CudaGemmPlan* gemm = nullptr;
             bool fused_activation  = false;
             bool situ              = false;
+            bool swiglu_concat     = false;  // QUANTIZE of [prefix | swiglu] read in place (swiglu_concat_match)
         };
         static size_t reserve(size_t& total, size_t bytes) {
             const size_t offset = total;
@@ -670,6 +698,7 @@ namespace SD_CUDA_NAMESPACE {
             p->padded      = (p->rows + 3) / 4 * 4;
             p->group       = mat ? op.group_size : 0;
             p->situ        = (p->kind == GATED || p->kind == SWIGLU_QUANTIZE) && ggml_get_glu_op(nodes[1]) == GGML_GLU_OP_SITU;
+            p->swiglu_concat = !mat && count == 3 && nodes[0]->op == GGML_OP_GLU;
             if (!mat)
                 sd_ggml_convrot_describe(dst, &p->group);
             size_t total = 0;
@@ -855,6 +884,67 @@ namespace SD_CUDA_NAMESPACE {
             }
             return cuda_last_error();
         }
+        static CUDAError swiglu_concat_launch(const Plan& p, CUDAStream stream, ggml_tensor* const* nodes, int8_t* dst, float* scales) {
+            const auto* glu    = nodes[0];
+            const auto* source = glu->src[0];
+            const auto* prefix = nodes[1]->src[0];
+            const int64_t half = source->ne[0] / 2;
+            const bool swapped = glu->op_params[1] != 0;
+            const auto* base   = static_cast<const float*>(source->data);
+            const SwigluConcatRows load{static_cast<const float*>(prefix->data), base + (swapped ? half : 0), base + (swapped ? 0 : half),
+                                        prefix->ne[0], int64_t(source->nb[1] / sizeof(float))};
+            if (p.padded > p.rows) {
+                auto error = cuda_memset_async(dst + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
+                if (error != cuda_success)
+                    return error;
+            }
+            static std::mutex mutex;
+            static std::unordered_map<int, bool> configured;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (!configured[p.device.device]) {
+                    auto error = cuda_set_shared_memory(quantize_convrot_swiglu_concat, int(p.device.shared_memory - 128));
+                    if (error != cuda_success)
+                        return error;
+                    configured[p.device.device] = true;
+                }
+            }
+            const int threads = p.k <= 1024 ? 128 : p.k <= 8192 ? 256
+                                                                : 1024;
+            quantize_convrot_swiglu_concat<<<unsigned(p.rows), threads, size_t(p.k) * sizeof(float), stream>>>(load, dst, scales, p.k, p.rows, p.k);
+            return cuda_last_error();
+        }
+        // A FLUX single block's linear2 input, concat(attention, swiglu(view of linear1)), and its ConvRot
+        // quantize run as one kernel that reads both in place (Fugue #382): the activation and the concat
+        // are never written. Klein 9B at 1024x1024 on an RTX 3090: 43 ms a step less, the same values.
+        static int swiglu_concat_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
+            auto* g = const_cast<ggml_cgraph*>(graph);
+            if (fusion_disabled() || first + 2 >= ggml_graph_n_nodes(g))
+                return 0;
+            const auto* glu    = ggml_graph_node(g, first);
+            const auto* concat = ggml_graph_node(g, first + 1);
+            const auto* quant  = ggml_graph_node(g, first + 2);
+            const auto* source = glu->src[0];
+            if (glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->src[1] || !source ||
+                glu->type != GGML_TYPE_F32 || source->type != GGML_TYPE_F32 || !ggml_is_contiguous(glu) ||
+                source->nb[0] != sizeof(float) || source->ne[0] % 2 || source->nb[1] % sizeof(float) ||
+                source->nb[2] != source->ne[1] * source->nb[1] || source->nb[3] != source->ne[2] * source->nb[2])
+                return 0;
+            if (concat->op != GGML_OP_CONCAT || concat->op_params[0] != 0 || concat->src[1] != glu ||
+                concat->type != GGML_TYPE_F32 || !ggml_is_contiguous(concat))
+                return 0;
+            const auto* prefix = concat->src[0];
+            if (!prefix || prefix->type != GGML_TYPE_F32 || !ggml_is_contiguous(prefix) || prefix->ne[0] % 256 || glu->ne[0] % 256)
+                return 0;
+            for (int d = 1; d < 4; ++d)
+                if (prefix->ne[d] != glu->ne[d] || concat->ne[d] != glu->ne[d])
+                    return 0;
+            int group;
+            if (quant->src[0] != concat || !sd_ggml_convrot_describe(quant, &group) || group != 256 || !convrot_supports(device, quant, nullptr) ||
+                size_t(concat->ne[0]) * sizeof(float) + 128 > cuda_device_info(device).shared_memory)
+                return 0;
+            return 3;
+        }
         template <bool Dequantize>
         static __global__ void gated_activation(const float* src, const float* xs, const float* ws, float* dst, int64_t n, int64_t rows, bool situ) {
             const int64_t i    = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -939,7 +1029,8 @@ namespace SD_CUDA_NAMESPACE {
             if (!mat) {
                 auto* quant  = static_cast<int8_t*>(output);
                 auto* scales = reinterpret_cast<float*>(quant + p.k * p.padded);
-                error        = convrot_launch(p, stream, static_cast<const float*>(dst->src[0]->data), quant, scales, reinterpret_cast<float*>(scratch_at(p.partial)));
+                error        = p.swiglu_concat ? swiglu_concat_launch(p, stream, nodes, quant, scales)
+                                                   : convrot_launch(p, stream, static_cast<const float*>(dst->src[0]->data), quant, scales, reinterpret_cast<float*>(scratch_at(p.partial)));
             } else {
                 auto* quant = reinterpret_cast<int8_t*>(scratch_at(p.quant));
                 const float* scales;
@@ -1184,6 +1275,15 @@ namespace SD_CUDA_NAMESPACE {
         desc.custom_op = sd_ggml_convrot_op();
         desc.supports  = sd_i8_cuda::convrot_supports;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+        desc.name      = "sd.quantize_i8_convrot.swiglu_concat." SD_CUDA_NAME ".v1";
+        desc.op        = GGML_OP_GLU;
+        desc.custom_op = nullptr;
+        desc.priority  = 240;
+        desc.supports  = nullptr;
+        desc.match     = sd_i8_cuda::swiglu_concat_match;
+        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+        desc.op        = GGML_OP_CUSTOM;
+        desc.match     = nullptr;
 #ifdef SD_CUDA_I8_CUTLASS
         desc.name      = "sd.linear_i8.swiglu_split.cuda.v1";
         desc.custom_op = sd_ggml_i8_op();
