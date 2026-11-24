@@ -705,7 +705,9 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* runner_ctx,
     };
 
 #ifndef SD_USE_UPSTREAM_GGML
-    if (sage_attn && mask == nullptr && d_head > 0 && d_head <= 128) {
+    // SageAttention only where it beats flash attention (Fugue #382): a head of 64 or 128 and no K/V
+    // range scaling, which would cost the copies it saves (Z-Image: 3% slower a step on an RTX 3090).
+    if (sage_attn && mask == nullptr && (d_head == 64 || d_head == 128) && kv_scale == 1.0f) {
         auto q_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(runner_ctx, q->type == GGML_TYPE_F32 ? q : ggml_cast(ctx, q, GGML_TYPE_F32)), d_head, L_q, n_head, N);
         auto k_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(runner_ctx, k->type == GGML_TYPE_F32 ? k : ggml_cast(ctx, k, GGML_TYPE_F32)), d_head, L_k, n_kv_head, N);
         const int64_t padded_head = d_head <= 64 ? 64 : 128;
