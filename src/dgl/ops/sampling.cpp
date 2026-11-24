@@ -58,6 +58,12 @@ namespace sd::dgl::ops {
         validate_mask(input, options);
         const int64_t sampling_start = ggml_time_ms();
         LOG_INFO("sampling started: method=%s, steps=%zu", options.method.c_str(), sigmas.size() - 1);
+        {   // the schedule that runs, for checking a cut of it against another implementation's
+            std::string schedule;
+            for (const float sigma : sigmas)
+                schedule += (schedule.empty() ? "" : ", ") + std::to_string(sigma);
+            LOG_INFO("sampling sigmas: %s", schedule.c_str());
+        }
         auto& model                  = prediction_run.dit();
         const auto& parameterization = prediction_run.parameterization();
         sd::ParallelScope tensor_scope(model.tensor_executor.get());
