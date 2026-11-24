@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <codecvt>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -415,12 +414,32 @@ namespace sd::metadata_reader {
             text.push_back(static_cast<char16_t>(little_endian ? data[offset] | (uint16_t(data[offset + 1]) << 8)
                                                                : (uint16_t(data[offset]) << 8) | data[offset + 1]));
         }
-        try {
-            std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter;
-            return trim_trailing_nuls(converter.to_bytes(text));
-        } catch (const std::range_error&) {
-            return json{{"error", "invalid UTF-16 UserComment"}, {"raw_hex_preview", hex_preview(data, size)}};
+        // UTF-16 to UTF-8 by hand: std::wstring_convert is deprecated (C++17). An unpaired surrogate is
+        // invalid, as it was for the converter.
+        std::string utf8;
+        for (size_t i = 0; i < text.size(); ++i) {
+            char32_t code = text[i];
+            if (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.size() && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF)
+                code = 0x10000 + ((code - 0xD800) << 10) + (char32_t(text[++i]) - 0xDC00);
+            else if (code >= 0xD800 && code <= 0xDFFF)
+                return json{{"error", "invalid UTF-16 UserComment"}, {"raw_hex_preview", hex_preview(data, size)}};
+            if (code < 0x80) {
+                utf8.push_back(static_cast<char>(code));
+            } else if (code < 0x800) {
+                utf8.push_back(static_cast<char>(0xC0 | (code >> 6)));
+                utf8.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            } else if (code < 0x10000) {
+                utf8.push_back(static_cast<char>(0xE0 | (code >> 12)));
+                utf8.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                utf8.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            } else {
+                utf8.push_back(static_cast<char>(0xF0 | (code >> 18)));
+                utf8.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+                utf8.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                utf8.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            }
         }
+        return trim_trailing_nuls(utf8);
     }
 
     json parse_exif_value(const std::vector<uint8_t>& data,

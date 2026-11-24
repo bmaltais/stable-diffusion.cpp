@@ -167,7 +167,7 @@ namespace sageattention {
                 offset_Q = smem_Q.advance_offset_by_row<16>(offset_Q);
             }
             // ! using permutation invariance
-            offset_Q = smem_Q.advance_offset_by_column<2>(offset_Q - (num_tiles_q * 16 * stride), iter);
+            offset_Q = smem_Q.template advance_offset_by_column<2>(offset_Q - (num_tiles_q * 16 * stride), iter);
 
 #pragma unroll
             for (uint32_t fk = 0; fk < num_tiles_k; fk++) {
@@ -185,7 +185,7 @@ namespace sageattention {
                     }
                 }
             }
-            offset_K = smem_K.advance_offset_by_column<2>(offset_K - (num_tiles_k * 16 * stride), iter);
+            offset_K = smem_K.template advance_offset_by_column<2>(offset_K - (num_tiles_k * 16 * stride), iter);
         }
 
         // following iteration, mma mode is kInplace
@@ -197,7 +197,7 @@ namespace sageattention {
                 smem_Q.ldmatrix_m8n8x4(offset_Q, RQ[fq]);
                 offset_Q = smem_Q.advance_offset_by_row<16>(offset_Q);
             }
-            offset_Q = smem_Q.advance_offset_by_column<2>(offset_Q - (num_tiles_q * 16 * stride), iter);
+            offset_Q = smem_Q.template advance_offset_by_column<2>(offset_Q - (num_tiles_q * 16 * stride), iter);
 
 #pragma unroll
             for (uint32_t fk = 0; fk < num_tiles_k; fk++) {
@@ -215,7 +215,7 @@ namespace sageattention {
                     }
                 }
             }
-            offset_K = smem_K.advance_offset_by_column<2>(offset_K - (num_tiles_k * 16 * stride), iter);
+            offset_K = smem_K.template advance_offset_by_column<2>(offset_K - (num_tiles_k * 16 * stride), iter);
         }
 
         offset_Q -= (2 * num_tiles_qk_inner);
@@ -513,7 +513,7 @@ namespace sageattention {
                     }
                 }
 
-                offset_V = smem_V.advance_offset_by_column<2>(offset_V, fv);
+                offset_V = smem_V.template advance_offset_by_column<2>(offset_V, fv);
             }
             offset_V = smem_V.advance_offset_by_row<16>(offset_V - (2 * num_tiles_v));
         }
@@ -544,7 +544,7 @@ namespace sageattention {
                     }
                 }
 
-                offset_V = smem_V.advance_offset_by_column<2>(offset_V, fv);
+                offset_V = smem_V.template advance_offset_by_column<2>(offset_V, fv);
             }
             offset_V = smem_V.advance_offset_by_row<16>(offset_V - (2 * num_tiles_v));
         }
@@ -563,7 +563,7 @@ namespace sageattention {
                     }
                 }
 
-                offset_V = smem_V.advance_offset_by_column<2>(offset_V, fv);
+                offset_V = smem_V.template advance_offset_by_column<2>(offset_V, fv);
             }
             offset_V = smem_V.advance_offset_by_row<16>(offset_V - (2 * num_tiles_v));
         }

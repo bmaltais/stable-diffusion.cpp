@@ -120,7 +120,9 @@ static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_sta
     }
 
     if (hidden_states.dim() == 1) {
-        hidden_states.unsqueeze_(1);
+        // reshape_, the same [n, 1] as unsqueeze_(1): GCC 16 reads unsqueeze_'s vector insert here as a
+        // memcpy into zero bytes (-Wstringop-overflow, a false positive).
+        hidden_states.reshape_({hidden_states.shape()[0], 1});
     }
 
     GGML_ASSERT(static_cast<size_t>(hidden_states.shape()[1]) == weights.size());

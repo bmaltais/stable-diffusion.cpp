@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <codecvt>
+#include <stdexcept>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -388,14 +388,58 @@ bool sd_preview_noisy                    = false;
 static sd_graph_eval_callback_t sd_backend_eval_cb = nullptr;
 static void* sd_backend_eval_cb_data               = nullptr;
 
+// UTF-8 <-> UTF-32 by hand: std::wstring_convert is deprecated (C++17). Like it, an invalid sequence
+// or code point (overlong, a surrogate, above U+10FFFF) throws std::range_error.
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
-    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-    return converter.from_bytes(utf8_str);
+    std::u32string out;
+    out.reserve(utf8_str.size());
+    for (size_t i = 0; i < utf8_str.size();) {
+        const auto lead = static_cast<unsigned char>(utf8_str[i]);
+        int extra       = lead < 0x80 ? 0 : (lead & 0xE0) == 0xC0 ? 1
+                                        : (lead & 0xF0) == 0xE0   ? 2
+                                        : (lead & 0xF8) == 0xF0   ? 3
+                                                                  : -1;
+        if (extra < 0 || i + static_cast<size_t>(extra) >= utf8_str.size())
+            throw std::range_error("invalid UTF-8");
+        char32_t code = extra == 0 ? lead : lead & (0x3F >> extra);
+        for (int k = 1; k <= extra; ++k) {
+            const auto next = static_cast<unsigned char>(utf8_str[i + k]);
+            if ((next & 0xC0) != 0x80)
+                throw std::range_error("invalid UTF-8");
+            code = (code << 6) | (next & 0x3F);
+        }
+        static const char32_t minimum[] = {0, 0x80, 0x800, 0x10000};
+        if (code < minimum[extra] || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+            throw std::range_error("invalid UTF-8");
+        out.push_back(code);
+        i += extra + 1;
+    }
+    return out;
 }
 
 std::string utf32_to_utf8(const std::u32string& utf32_str) {
-    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-    return converter.to_bytes(utf32_str);
+    std::string out;
+    out.reserve(utf32_str.size());
+    for (const char32_t code : utf32_str) {
+        if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+            throw std::range_error("invalid code point");
+        if (code < 0x80) {
+            out.push_back(static_cast<char>(code));
+        } else if (code < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (code >> 6)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        } else if (code < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (code >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        }
+    }
+    return out;
 }
 
 std::u32string unicode_value_to_utf32(int unicode_value) {
