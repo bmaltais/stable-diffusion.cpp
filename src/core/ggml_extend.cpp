@@ -708,8 +708,12 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* runner_ctx,
     if (sage_attn && mask == nullptr && d_head > 0 && d_head <= 128) {
         auto q_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(runner_ctx, q->type == GGML_TYPE_F32 ? q : ggml_cast(ctx, q, GGML_TYPE_F32)), d_head, L_q, n_head, N);
         auto k_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(runner_ctx, k->type == GGML_TYPE_F32 ? k : ggml_cast(ctx, k, GGML_TYPE_F32)), d_head, L_k, n_kv_head, N);
-        auto v_in                 = ggml_ext_cont(runner_ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
         const int64_t padded_head = d_head <= 64 ? 64 : 128;
+        // V needing no padding or scaling is permuted and cast to F16 in one copy, not an F32 copy and
+        // a cast (Fugue #382: 13.7 ms a step of Klein 9B at 1024x1024 on an RTX 3090, same values).
+        const bool v_cast_once = padded_head == d_head && kv_scale == 1.0f;
+        auto v_in              = v_cast_once ? ggml_cast(ctx, ggml_permute(ctx, v, 0, 2, 1, 3), GGML_TYPE_F16)
+                                             : ggml_ext_cont(runner_ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
         if ((padded_head != d_head || kv_scale != 1.0f) && v_in->type != GGML_TYPE_F32) {
             v_in = ggml_cast(ctx, v_in, GGML_TYPE_F32);
         }
@@ -723,7 +727,9 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* runner_ctx,
             k_in = ggml_ext_scale(runner_ctx, k_in, kv_scale);
             v_in = ggml_ext_scale(runner_ctx, v_in, kv_scale);
         }
-        v_in     = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+        if (v_in->type != GGML_TYPE_F16) {
+            v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+        }
         auto out = ggml_ext_sage_attn(runner_ctx, q_in, k_in, v_in, scale / kv_scale, GGML_SAGE_ATTN_AUTO);
         if (ggml_backend_supports_op(backend, out)) {
             kqv = kv_scale != 1.0f ? ggml_ext_scale(runner_ctx, out, 1.0f / kv_scale) : out;
