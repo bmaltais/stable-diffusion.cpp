@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "core/util.h"
+#include "model_loader.h"
 #include "dgl/models/dit.h"
 #include "dgl/models/fwd.h"
 #include "dgl/ops/predictor.h"
@@ -57,6 +58,7 @@ namespace sd::dgl::ops {
     Tensor<float> run_sample(const Tensor<float>& input, const std::vector<float>& sigmas, PredictionExecution& prediction_run, const SamplingSolver& solver, const SamplingOptions& options, RunEvents& events) {
         validate_mask(input, options);
         const int64_t sampling_start = ggml_time_ms();
+        const int64_t load_before    = sd_thread_tensor_load_ms();  // a lazy weight load is timed on its own
         LOG_INFO("sampling started: method=%s, steps=%zu", options.method.c_str(), sigmas.size() - 1);
         {   // the schedule that runs, for checking a cut of it against another implementation's
             std::string schedule;
@@ -103,7 +105,10 @@ namespace sd::dgl::ops {
         if (options.finish.value_or(false) && !terminal_zero)
             output = parameterization.finish(sigmas.back(), output);
         observation.end(output);
-        LOG_INFO("sampling completed, taking %.2fs", (ggml_time_ms() - sampling_start) / 1000.0);
+        const int64_t load_ms = sd_thread_tensor_load_ms() - load_before;
+        if (load_ms > 0)
+            LOG_INFO("sampling loaded the model weights first, taking %.2fs", load_ms / 1000.0);
+        LOG_INFO("sampling completed, taking %.2fs", (ggml_time_ms() - sampling_start - load_ms) / 1000.0);
         return output;
     }
 

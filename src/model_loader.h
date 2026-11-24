@@ -13,6 +13,10 @@
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
+// Milliseconds this thread has spent in ModelLoader::load_tensors, so a caller can keep a lazy
+// weight load that happens inside its own timing apart (Fugue #382: sampling loads the DiT).
+int64_t sd_thread_tensor_load_ms();
+
 void convert_tensor(void* src,
                     ggml_type src_type,
                     void* dst,

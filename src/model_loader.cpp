@@ -1111,6 +1111,12 @@ std::vector<ggml_backend_buffer_t> ModelLoader::get_device_mmap_buffers() const 
     return buffers;
 }
 
+static thread_local int64_t thread_tensor_load_ms = 0;
+
+int64_t sd_thread_tensor_load_ms() {
+    return thread_tensor_load_ms;
+}
+
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                                bool enable_mmap,
                                const std::set<std::string>* target_tensor_names,
@@ -1447,6 +1453,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
     }
 
     int64_t end_time = ggml_time_ms();
+    thread_tensor_load_ms += end_time - start_time;
     if (log_progress) {
         LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
                  (end_time - start_time) / 1000.f,
