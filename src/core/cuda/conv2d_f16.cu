@@ -76,12 +76,22 @@ namespace SD_CUDA_NAMESPACE {
         };
         // `normalized`: a group norm's F16 output that this step makes itself (match_norm).
         static Layout layout(const Shape& s, bool normalized = false) {
+            const size_t input = aligned(size_t(s.n) * s.h * s.w * s.c * sizeof(half));
+            const size_t output = aligned(size_t(s.n) * s.p * s.q * s.k * sizeof(half));
             Layout l;
             l.normalized = 0;
-            l.input      = normalized ? aligned(size_t(s.n) * s.h * s.w * s.c * sizeof(half)) : 0;
-            l.kernel = l.input + aligned(size_t(s.n) * s.h * s.w * s.c * sizeof(half));
-            l.output = l.kernel + aligned(size_t(s.k) * s.r * s.s * s.c * sizeof(half));
-            l.total  = l.output + aligned(size_t(s.n) * s.p * s.q * s.k * sizeof(half));
+            l.input      = normalized ? input : 0;
+            l.kernel     = l.input + input;
+            l.total      = l.kernel + aligned(size_t(s.k) * s.r * s.s * s.c * sizeof(half));
+            // The group norm's F16 output is read only by the transpose to NHWC, which comes before the
+            // convolution writes: the output takes its place when it fits (a VAE decode's compute
+            // buffer 3.3 -> 2.8 GB at 1024x1024, Fugue #382).
+            if (normalized && output <= input) {
+                l.output = l.normalized;
+            } else {
+                l.output = l.total;
+                l.total += output;
+            }
             return l;
         }
 
