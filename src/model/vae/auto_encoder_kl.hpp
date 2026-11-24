@@ -749,6 +749,10 @@ struct AutoEncoderKL : public VAE {
                                const sd::Tensor<float>& z,
                                bool decode_graph) override {
         GGML_ASSERT(!decode_only || decode_graph);
+        // Fugue #382: sd.conv2d_f16 for decoding only. Encoding with it is 0.20 -> 0.12 s a 1024x1024
+        // picture, but an edit's reference latents feed the DiT, which turns the small difference
+        // into 37-38 dB on the edited picture; the encoder keeps ggml's convolution until that is chosen.
+        fast_conv2d_enabled = decode_graph;
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };

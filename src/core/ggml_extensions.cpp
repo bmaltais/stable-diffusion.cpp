@@ -452,6 +452,47 @@ bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* 
     return true;
 }
 
+static bool conv2d_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (count != 3 || !attributes)
+        return false;
+    SDConv2dParams p;
+    std::memcpy(&p, attributes, sizeof(p));
+    const auto *x = inputs[0], *w = inputs[1], *b = inputs[2];
+    if (!x || !w || !b || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F16 || b->type != GGML_TYPE_F32 ||
+        !ggml_is_contiguous(x) || !ggml_is_contiguous(w) || !ggml_is_contiguous(b) || w->ne[2] != x->ne[2] ||
+        ggml_nelements(b) != w->ne[3] || p.s0 < 1 || p.s1 < 1 || p.d0 < 1 || p.d1 < 1 || p.p0 < 0 || p.p1 < 0 || p.upsample < 1 ||
+        p.upsample > 8)
+        return false;
+    const int64_t iw = x->ne[0] * p.upsample, ih = x->ne[1] * p.upsample;
+    const int64_t ow = (iw + 2 * p.p0 - p.d0 * (w->ne[0] - 1) - 1) / p.s0 + 1;
+    const int64_t oh = (ih + 2 * p.p1 - p.d1 * (w->ne[1] - 1) - 1) / p.s1 + 1;
+    if (ow < 1 || oh < 1)
+        return false;
+    *out = {GGML_TYPE_F32, {ow, oh, w->ne[3], x->ne[3]}};
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_conv2d_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.conv2d_f16.v1", sizeof(SDConv2dParams), conv2d_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_conv2d_describe(const ggml_tensor* node, SDConv2dParams* params) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_conv2d_op() || node->src[3] || !ggml_is_contiguous(node))
+        return false;
+    ggml_ext_tensor_desc output;
+    const auto* attributes = ggml_ext_op_attributes(node);
+    if (!conv2d_infer(node->src, 3, attributes, &output) || node->type != output.type || std::memcmp(node->ne, output.ne, sizeof(output.ne)))
+        return false;
+    std::memcpy(params, attributes, sizeof(*params));
+    return true;
+}
+
 static bool group_norm_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
     if (count != 3 || !attributes)
         return false;

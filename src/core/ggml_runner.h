@@ -83,6 +83,7 @@ struct GGMLRunnerContext {
     float conv_scale                                                 = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
+    bool fast_conv2d_enabled                                         = false;  // Fugue #382: sd.conv2d_f16 where a kernel runs it
     bool conv3d_direct_enabled                                       = false;
     bool circular_x_enabled                                          = false;
     bool circular_y_enabled                                          = false;
@@ -172,6 +173,7 @@ protected:
     float conv_scale           = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
+    bool fast_conv2d_enabled   = false;
     bool conv3d_direct_enabled = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;

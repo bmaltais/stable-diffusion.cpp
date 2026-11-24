@@ -411,6 +411,31 @@ ggml_tensor* ggml_ext_conv_1d(GGMLRunnerContext* runner_ctx,
     return result;
 }
 
+ggml_tensor* ggml_ext_conv_2d_fast(GGMLRunnerContext* runner_ctx,
+                                   ggml_tensor* x,
+                                   ggml_tensor* w,
+                                   ggml_tensor* b,
+                                   int s0,
+                                   int s1,
+                                   int p0,
+                                   int p1,
+                                   int d0,
+                                   int d1,
+                                   int upsample) {
+#ifndef SD_USE_UPSTREAM_GGML
+    // A VAE's convolution with its bias as one op where a kernel runs it (Fugue #382: CUTLASS on CUDA).
+    if (runner_ctx->fast_conv2d_enabled && b != nullptr && runner_ctx->backend != nullptr && x->type == GGML_TYPE_F32 &&
+        w->type == GGML_TYPE_F16 && b->type == GGML_TYPE_F32 && ggml_is_contiguous(x)) {
+        const SDConv2dParams params = {s0, s1, p0, p1, d0, d1, upsample};
+        ggml_tensor* inputs[]       = {x, w, b};
+        auto* fused                 = ggml_ext_op_create(runner_ctx->ggml_ctx, sd_ggml_conv2d_op(), inputs, 3, &params);
+        if (fused != nullptr && ggml_backend_supports_op(runner_ctx->backend, fused))
+            return fused;
+    }
+#endif
+    return nullptr;
+}
+
 ggml_tensor* ggml_ext_conv_2d(GGMLRunnerContext* runner_ctx,
                               ggml_tensor* x,
                               ggml_tensor* w,
@@ -439,6 +464,10 @@ ggml_tensor* ggml_ext_conv_2d(GGMLRunnerContext* runner_ctx,
         p1 = 0;
     }
 
+    if (direct && scale == 1.f) {
+        if (auto* fused = ggml_ext_conv_2d_fast(runner_ctx, x, w, b, s0, s1, p0, p1, d0, d1, 1))
+            return fused;
+    }
     if (direct) {
         x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
     } else {

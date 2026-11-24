@@ -524,6 +524,16 @@ public:
                                 ctx->circular_y_enabled,
                                 scale);
     }
+
+    // This convolution of x scaled up `factor` times (nearest) as one op, or nullptr where that op does
+    // not apply; the caller then scales up and calls forward (Fugue #382).
+    ggml_tensor* forward_upsampled(GGMLRunnerContext* ctx, ggml_tensor* x, int factor) {
+        const float scale = ctx->conv_scale > 0.f ? ctx->conv_scale : this->scale;
+        if (ctx->weight_adapter || !bias || scale != 1.f || !ctx->conv2d_direct_enabled || ctx->circular_x_enabled || ctx->circular_y_enabled)
+            return nullptr;
+        return ggml_ext_conv_2d_fast(ctx, x, params["weight"], params["bias"], stride.second, stride.first, padding.second, padding.first,
+                                     dilation.second, dilation.first, factor);
+    }
 };
 
 class Conv2d_grouped : public UnaryBlock {

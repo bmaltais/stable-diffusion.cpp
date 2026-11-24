@@ -59,6 +59,8 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
+        if (auto* fused = conv->forward_upsampled(ctx, x, 2))  // Fugue #382: never writes the 4x larger input
+            return fused;
 
         x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
         x = conv->forward(ctx, x);                                       // [N, out_channels, h*2, w*2]

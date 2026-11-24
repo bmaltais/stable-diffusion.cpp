@@ -18,6 +18,7 @@ namespace SD_CUDA_NAMESPACE {
     void register_bf16(ggml_backend_dev_t device);
     void register_rms_affine(ggml_backend_dev_t device);
     void register_group_norm(ggml_backend_dev_t device);  // Fugue #382
+    void register_conv2d_f16(ggml_backend_dev_t device);  // Fugue #382
 #if defined(SD_CUDA_VENDOR_HIP)
     void register_wmma_attention(ggml_backend_dev_t device);
 #endif
@@ -39,6 +40,7 @@ namespace SD_CUDA_NAMESPACE {
         register_bf16(device);
         register_rms_affine(device);
         register_group_norm(device);
+        register_conv2d_f16(device);
 #if defined(SD_CUDA_VENDOR_HIP)
         register_wmma_attention(device);
 #endif

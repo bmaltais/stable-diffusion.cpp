@@ -109,6 +109,20 @@ ggml_tensor* ggml_ext_conv_1d(GGMLRunnerContext* runner_ctx,
                               bool force_prec_f32 = false);
 
 // w: [OC，IC, KH, KW]
+// A direct convolution and its bias as one sd.conv2d_f16 op, of x scaled up `upsample` times (nearest)
+// first; nullptr where the runner does not ask for it or the backend has no kernel (Fugue #382).
+ggml_tensor* ggml_ext_conv_2d_fast(GGMLRunnerContext* runner_ctx,
+                                   ggml_tensor* x,
+                                   ggml_tensor* w,
+                                   ggml_tensor* b,
+                                   int s0,
+                                   int s1,
+                                   int p0,
+                                   int p1,
+                                   int d0,
+                                   int d1,
+                                   int upsample);
+
 // x: [N, IC, IH, IW]
 // b: [OC,]
 // result: [N, OC, OH, OW]

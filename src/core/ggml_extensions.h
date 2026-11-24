@@ -110,6 +110,18 @@ struct SDSageAttentionParams {
 
 ggml_ext_op_t sd_ggml_sage_attn_op();
 
+// A direct 2D convolution with its bias in one op (Fugue #382): inputs x [W, H, C, N] F32, the kernel
+// [KW, KH, C, K] F16 and the bias [K] F32; the output [OW, OH, K, N] F32, as ggml_conv_2d_direct and
+// an ADD of the bias give it. Strides, padding and dilation as ggml's (0 is the W axis, 1 the H axis).
+// upsample > 1 convolves x scaled up by that factor, nearest neighbour, as ggml_upscale gives it.
+struct SDConv2dParams {
+    int32_t s0, s1, p0, p1, d0, d1, upsample;
+};
+
+ggml_ext_op_t sd_ggml_conv2d_op();
+
+bool sd_ggml_conv2d_describe(const ggml_tensor* node, SDConv2dParams* params);
+
 // Group norm and its affine in one op (Fugue #382): inputs x [W, H, C, N] F32, gamma and beta [C]
 // F32; the output is x's shape. A kernel that runs it computes ggml's GROUP_NORM, MUL, ADD values.
 struct SDGroupNormParams {
