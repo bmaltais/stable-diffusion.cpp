@@ -157,6 +157,10 @@ namespace sd {
         // Differential diffusion (arXiv 2306.00950): an image mask keeps its values between 0 and 1
         // and sets how late each latent cell is released from the start latent. Off: upstream.
         bool soft_mask{};
+        // Variation seeds: the start noise is a spherical blend of the seed's noise toward the noise of
+        // `variation_seed` by `variation_strength` (0..1). 0: upstream, the program unchanged. Images only.
+        int64_t variation_seed{};
+        float variation_strength{};
         // How reference images are sized before the VAE: "" (the library's own: at most a megapixel
         // and the output's area, a multiple of 16) or "resize_before_vae=false" (each as it came).
         const char* ref_image_args{};

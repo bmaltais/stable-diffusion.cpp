@@ -1,6 +1,7 @@
 #include "api/fugue_stage.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <set>
 #include <sstream>
@@ -304,7 +305,7 @@ namespace sd::api::fugue_stage {
 
     static bool any_option(const FugueStageConfig& fugue) {
         return fugue.init_latent_in || fugue.init_latent_out || fugue.cond_in || fugue.cond_out || fugue.latent_in ||
-               fugue.latent_out || fugue.stop_after || fugue.init_video || fugue.soft_mask;
+               fugue.latent_out || fugue.stop_after || fugue.init_video || fugue.soft_mask || fugue.variation_strength > 0;
     }
 
     bool wanted(const ImageConfig& image) {
@@ -316,12 +317,31 @@ namespace sd::api::fugue_stage {
     }
 
     // The sampling options of the patch: the noise-level reading of strength and the soft mask.
-    static void sampling_edits(Replacements& replace, const Rendered& rendered, const ImageConfig& image, bool inpaint) {
+    static void sampling_edits(Replacements& replace, const Rendered& rendered, const ImageConfig& image, bool inpaint, int64_t seed) {
         if (image.strength < 1.f && rendered.has("sigmas") && rendered.value_of("sigmas").rfind("slice_sigmas_by_strength(", 0) == 0) {
             const auto reading = noise_level(image.sample_params.extra_sample_args);
             if (reading.enabled)
                 replace["sigmas"] = {std::string("    sigmas = fugue::noise_level_sigmas(pos, full_sigmas, strength, force_first = ") +
                                      (reading.force_first ? "true" : "false") + ")"};
+        }
+        if (image.fugue.variation_strength > 0 && rendered.has("start")) {
+            const std::string plain = "tensor::randn_like(base, rng = rng)";
+            auto start              = rendered.value_of("start");
+            const auto at           = start.find(plain);
+            if (at == std::string::npos || start.find(plain, at + 1) != std::string::npos)
+                refuse("fugue.variation_strength: this program does not draw its noise where expected");
+            // A second generator, so `rng` (and a sampler sharing it) keeps the main seed's stream.
+            int64_t other = image.fugue.variation_seed & INT64_MAX;
+            if (other == seed)
+                other = (other + 1) & INT64_MAX;
+            char strength[32];
+            std::snprintf(strength, sizeof strength, "%.9g", double(image.fugue.variation_strength));
+            start.replace(at, plain.size(),
+                          "fugue::slerp(" + plain + ", tensor::randn_like(base, rng = make_rng(rng_type, seed = " + std::to_string(other) +
+                              ")), " + strength + ")");
+            replace["start"] = {"    start = " + start};
+        } else if (image.fugue.variation_strength > 0) {
+            refuse("fugue.variation_strength: this program has no start noise to vary");
         }
         // An inpaint model reads the mask as a channel it was trained to see as 0 or 1.
         if (!image.fugue.soft_mask || !image.mask_image.data || inpaint)
@@ -392,7 +412,7 @@ namespace sd::api::fugue_stage {
                 const auto latent = rendered.result_latent();
                 replace[latent]   = {"    " + latent + " = fugue::load_latent(" + quoted(fugue.latent_in) + ", " + quoted(version) + ", index = " + std::to_string(i) + ")"};
             } else {
-                sampling_edits(replace, rendered, config.image, inpaint);
+                sampling_edits(replace, rendered, config.image, inpaint, int64_t((uint64_t(seed) + uint64_t(i)) & INT64_MAX));
                 if (fugue.cond_in)
                     read_conditions(replace, rendered, fugue.cond_in, version);
                 if (fugue.init_latent_in) {
@@ -636,6 +656,46 @@ namespace sd::api::fugue_stage {
         return dgl::tensor_value(sd::Tensor<float>::from_vector(std::move(sigmas)));
     }
 
+    // Spherical interpolation of two noise tensors, per batch item (the last dimension), as ComfyUI_essentials'
+    // KSamplerVariationsWithNoise does: both flattened and normalised, the angle between them walked by
+    // `strength`. Nearly parallel noises fall back to a straight lerp. Strength 0 returns `a` untouched.
+    static dgl::Value slerp(dgl::Values& args, dgl::RunState&) {
+        const auto& a        = dgl::float_tensor(args, "a");
+        const auto& b        = dgl::float_tensor(args, "b");
+        const double s       = dgl::get_number(args, "strength");
+        if (a.shape() != b.shape())
+            refuse("fugue::slerp needs two noises of one shape");
+        if (s == 0)
+            return dgl::tensor_value(sd::Tensor<float>(a));
+        const int64_t items = a.shape().back();
+        const int64_t size  = a.numel() / items;
+        std::vector<float> out(static_cast<size_t>(a.numel()));
+        for (int64_t item = 0; item < items; ++item) {
+            const float* x = a.data() + item * size;
+            const float* y = b.data() + item * size;
+            float* z       = out.data() + item * size;
+            double xx = 0, yy = 0;
+            for (int64_t i = 0; i < size; ++i) {
+                xx += double(x[i]) * x[i];
+                yy += double(y[i]) * y[i];
+            }
+            const double nx = std::sqrt(xx), ny = std::sqrt(yy);
+            double dot = 0;
+            for (int64_t i = 0; i < size; ++i)
+                dot += (nx > 0 ? x[i] / nx : 0.0) * (ny > 0 ? y[i] / ny : 0.0);
+            dot = std::clamp(dot, -1.0, 1.0);
+            double wa = 1 - s, wb = s;
+            if (std::fabs(dot) <= 0.9995) {
+                const double omega = std::acos(dot), sine = std::sin(omega);
+                wa = std::sin((1 - s) * omega) / sine;
+                wb = std::sin(s * omega) / sine;
+            }
+            for (int64_t i = 0; i < size; ++i)
+                z[i] = float(wa * x[i] + wb * y[i]);
+        }
+        return dgl::tensor_value(sd::Tensor<float>(a.shape(), std::move(out)));
+    }
+
     void register_operations(dgl::Registry& registry) {
         using dgl::Kind;
         registry["fugue::load_condition"] = dgl::make_operation(
@@ -652,6 +712,9 @@ namespace sd::api::fugue_stage {
             {dgl::required("predict", Kind::Predictor), dgl::required("sigmas", Kind::Tensor), dgl::number("strength", 0, 1),
              dgl::optional("force_first", Kind::Boolean, false)},
             {Kind::Tensor}, noise_level_sigmas);
+        registry["fugue::slerp"] = dgl::make_operation(
+            {dgl::required("a", Kind::Tensor), dgl::required("b", Kind::Tensor), dgl::number("strength", 0, 1)},
+            {Kind::Tensor}, slerp);
     }
 
 }  // namespace sd::api::fugue_stage

@@ -460,6 +460,8 @@ static void add_fugue_specs(std::vector<ParamSpec>& specs) {
     fugue.string("fugue.stop_after", &sd::FugueStageConfig::stop_after);
     fugue.string("fugue.init_video", &sd::FugueStageConfig::init_video);
     fugue.boolean("fugue.soft_mask", &sd::FugueStageConfig::soft_mask);
+    fugue.integer("fugue.variation_seed", &sd::FugueStageConfig::variation_seed, 0, INT64_MAX);
+    fugue.number("fugue.variation_strength", &sd::FugueStageConfig::variation_strength, 0, 1);
     fugue.string("ref_image_args", &sd::FugueStageConfig::ref_image_args);
 }
 
