@@ -3196,7 +3196,12 @@ struct LLMEmbedder : public Conditioner {
             max_length                       = 4096;
             prompt                           = system_prefix("<|im_start|>user\n");
             prompt_attn_range.first          = static_cast<int>(prompt.size());
-            prompt += conditioner_params.text;
+            {
+                // As ComfyUI: the instruction is stripped of surrounding whitespace before the chat template.
+                const auto first = conditioner_params.text.find_first_not_of(" \t\n\r\f\v");
+                const auto last  = conditioner_params.text.find_last_not_of(" \t\n\r\f\v");
+                prompt += first == std::string::npos ? std::string() : conditioner_params.text.substr(first, last - first + 1);
+            }
             prompt_attn_range.second = static_cast<int>(prompt.size());
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n";
         } else if (sd_version_is_flux3(version)) {

@@ -27,6 +27,17 @@ namespace sd::api {
         throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "ref_image_args supports only resize_before_vae=true or resize_before_vae=false");
     }
 
+    // moss_edit_format: "" or "ai-toolkit" keep the library's layout; "moss-image-edit" is ComfyUI's
+    // Moss-Image-Edit (text_start anchor, references only through the VAE).
+    static bool moss_image_edit_layout(const char* format) {
+        const std::string value = format ? format : "";
+        if (value.empty() || value == "ai-toolkit")
+            return false;
+        if (value == "moss-image-edit")
+            return true;
+        throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "moss_edit_format supports only ai-toolkit or moss-image-edit");
+    }
+
     static std::string reference_pixels(GenerationTemplate& request, const sd_tensor_t* tensor, size_t index, bool encode) {
         const auto version = request.definition.version;
         const auto name    = "reference_" + std::to_string(index);
@@ -39,7 +50,7 @@ namespace sd::api {
             const double scale = version == VERSION_P_H3_IMAGE ? std::min(1.0, std::sqrt(double(target_width) * target_height / (double(width) * height))) : double(std::clamp(std::min(width, height), 1024, 2048)) / std::min(width, height);
             width              = std::max(32, int(std::nearbyint(width * scale / 32)) * 32);
             height             = std::max(32, int(std::nearbyint(height * scale / 32)) * 32);
-        } else if (version == VERSION_MOSS_IMAGE) {
+        } else if (version == VERSION_MOSS_IMAGE && !keep_reference_size(request.image.fugue.ref_image_args)) {
             const double scale = std::min(1.0, 1024.0 / std::max(width, height));
             width              = std::max(factor, int(std::round(width * scale / factor)) * factor);
             height             = std::max(factor, int(std::round(height * scale / factor)) * factor);
@@ -95,8 +106,11 @@ namespace sd::api {
             return;
         const bool moss_edit  = version == VERSION_MOSS_IMAGE;
         const bool qwen_edit  = sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_LAYERED;
-        const bool has_vision = (moss_edit || qwen_edit) && prompt_has_vision(request);
-        if (moss_edit && !has_vision)
+        const bool moss_layout = moss_edit && moss_image_edit_layout(request.image.fugue.moss_edit_format);
+        const bool has_vision  = (moss_edit || qwen_edit) && !moss_layout && prompt_has_vision(request);
+        if (moss_layout)
+            LOG_INFO("MOSS-Image edit layout moss-image-edit: %zu reference(s) through the VAE only, text_start anchor, no vision", refs.size());
+        else if (moss_edit && !has_vision)
             LOG_INFO("MOSS-Image HQ edit is using text-only prompt conditioning; set llm_vision_path (--llm_vision) to add reference images to Qwen3.5");
         std::string pixels, latents;
         const bool encode = version != VERSION_HIDREAM_O1;
@@ -133,7 +147,7 @@ namespace sd::api {
                                                                                                         : "fixed") +
                                   ", force_ref_timestep_zero = " + literal(sd_version_is_llada_image(version) || sd_version_is_krea2(version) || moss_edit);
             if (moss_edit)
-                options += ", ref_rope_anchor = \"image_start\"";
+                options += moss_layout ? ", ref_rope_anchor = \"text_start\"" : ", ref_rope_anchor = \"image_start\"";
             request.fields["predictor_options"] += options;
             request.fields["negative_predictor_options"] += options;
             request.fields["reference_predictor_options"] += options;

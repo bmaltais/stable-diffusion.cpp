@@ -463,6 +463,7 @@ static void add_fugue_specs(std::vector<ParamSpec>& specs) {
     fugue.integer("fugue.variation_seed", &sd::FugueStageConfig::variation_seed, 0, INT64_MAX);
     fugue.number("fugue.variation_strength", &sd::FugueStageConfig::variation_strength, 0, 1);
     fugue.string("ref_image_args", &sd::FugueStageConfig::ref_image_args);
+    fugue.string("moss_edit_format", &sd::FugueStageConfig::moss_edit_format);
 }
 
 static void add_tiling_specs(std::vector<ParamSpec>& specs) {

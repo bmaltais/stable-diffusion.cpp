@@ -164,6 +164,10 @@ namespace sd {
         // How reference images are sized before the VAE: "" (the library's own: at most a megapixel
         // and the output's area, a multiple of 16) or "resize_before_vae=false" (each as it came).
         const char* ref_image_args{};
+        // MOSS-Image edit layout: "" or "ai-toolkit" (the library's own: references anchored at the image start,
+        // vision on when the text encoder has it) or "moss-image-edit" (text_start anchor, VAE references only,
+        // no vision). Other models ignore it.
+        const char* moss_edit_format{};
     };
 
     struct ImageConfig {
