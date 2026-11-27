@@ -563,6 +563,15 @@ SD_API bool sd_add_rpc_servers(const char* servers);
 SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
+// Fugue: what a model file is, from its header alone (no backend, no weights, no context).
+// Returns a malloc'd JSON object, to be released with sd_fugue_string_free (NULL only when out of memory):
+//   {"recognised": true, "version": "Flux.1 dev", "id": "...", "is_dit": bool, "video": bool,
+//    "inpaint": bool, "latent_channels": N, "vae_kind": "kl"|"flux"|"flux2"|"wan"|"hunyuan"|"ltxav"|"minimax_h3"|"mage"}
+//   {"recognised": false}            the file was read but is no family this build knows
+//   {"error": "..."}                 the file could not be read
+SD_API char* sd_fugue_inspect_model(const char* path);
+SD_API void sd_fugue_string_free(char* text);
+
 // Build information
 
 SD_API const char* sd_commit(void);
