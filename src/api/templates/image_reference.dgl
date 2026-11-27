@@ -1,6 +1,9 @@
     {{name}}_original = image::to_f32({{name}}, channels = {{channels}})
 {% if crop_only %}
     {{name}}_pixels = tensor::crop({{name}}_original, axes = [0, 1], start = [{{crop_x}}, {{crop_y}}], size = [{{width}}, {{height}}])
+{% elif fit_crop %}
+    {{name}}_cropped = tensor::crop({{name}}_original, axes = [0, 1], start = [{{crop_x}}, {{crop_y}}], size = [{{crop_width}}, {{crop_height}}])
+    {{name}}_pixels = tensor::clamp(tensor::interpolate({{name}}_cropped, size = [{{width}}, {{height}}], mode = {{mode}}, antialias = true), 0, 1)
 {% elif center_crop %}
     {{name}}_resized = tensor::interpolate({{name}}_original, size = [{{resize_width}}, {{resize_height}}], mode = "lanczos")
     {{name}}_pixels = tensor::crop({{name}}_resized, axes = [0, 1], start = [{{crop_x}}, {{crop_y}}], size = [{{width}}, {{height}}])

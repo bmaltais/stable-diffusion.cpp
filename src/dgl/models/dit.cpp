@@ -401,6 +401,8 @@ namespace sd::dgl::models {
             params.extra = MiniT2IDiffusionExtra{params.y};
         } else if (sd_version_is_sensenova_u1(version())) {
             params.extra = SenseNovaU1DiffusionExtra{present(condition.c_input_ids)};
+        } else if (sd_version_is_krea2(version()) && options.krea2_edit) {
+            params.extra = Krea2DiffusionExtra{true, &options.ref_boosts, &options.ref_positions};
         } else if (sd_version_is_z_image(version()) && !step.controls.empty()) {
             z_image_controls.reserve(step.controls.size());
             for (const auto* binding : step.controls)

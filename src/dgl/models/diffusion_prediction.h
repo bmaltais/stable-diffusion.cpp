@@ -45,6 +45,10 @@ namespace sd::dgl::models {
         Rope::RefIndexMode ref_index_mode   = Rope::RefIndexMode::FIXED;
         Rope::RefRoPEAnchor ref_rope_anchor = Rope::RefRoPEAnchor::MODEL_DEFAULT;
         bool force_ref_timestep_zero        = false;
+        // Krea 2 Edit layout (Krea2DiffusionExtra): one boost and one position (0 aligned, 1 beside, 2 bag) per reference.
+        bool krea2_edit = false;
+        std::vector<float> ref_boosts;
+        std::vector<int> ref_positions;
         std::function<PredictionParameters(PredictionParameters)> transform;
     };
 

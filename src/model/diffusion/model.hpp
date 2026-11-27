@@ -152,6 +152,15 @@ struct ZImageDiffusionExtra {
     const std::vector<ZImageControlInput>* controls = nullptr;
 };
 
+// Krea 2 Edit layout (ComfyUI-Krea2Edit, Apache-2.0, github.com/lbouaraba/comfyui-krea2edit): each reference
+// centred on the output's grid (its own frame index 1, 2, ...), placed per `positions` (0 aligned, 1 beside,
+// 2 bag of features), and the output's attention to it scaled by `boosts` (1: none).
+struct Krea2DiffusionExtra {
+    bool edit_layout                  = false;
+    const std::vector<float>* boosts  = nullptr;
+    const std::vector<int>* positions = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -168,7 +177,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           HunyuanVideoDiffusionExtra,
                                           LLaDAImageDiffusionExtra,
                                           MingImageDiffusionExtra,
-                                          ZImageDiffusionExtra>;
+                                          ZImageDiffusionExtra,
+                                          Krea2DiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

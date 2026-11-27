@@ -150,6 +150,8 @@ struct ConditionerParams {
     const std::vector<MiniMaxH3PresentationItem>* minimax_h3_references = nullptr;
     std::optional<std::string> system_prompt;
     bool raw = false;
+    // Krea 2: false drops the "Picture N: " text before each reference's vision block (the Krea 2 Edit layout).
+    bool image_labels = true;
     std::shared_ptr<sd::TextualInversion> textual_inversion;
 };
 
@@ -3030,13 +3032,17 @@ struct LLMEmbedder : public Conditioner {
                                          static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
 
                     LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    if (!conditioner_params.image_labels)
+                        LOG_INFO("Krea 2 Edit: vision reference %d at %dx%d", i, w_bar, h_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
                     auto image_embed   = llm->encode_image(n_threads, resized_image, false);
                     if (image_embed.empty())
                         return {};
 
-                    std::string image_prefix = prompt + img_prompt + "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+                    // The Krea 2 Edit layout (ComfyUI-Krea2Edit) has no "Picture N: " text before a vision block.
+                    const std::string label  = conditioner_params.image_labels ? "Picture " + std::to_string(i + 1) + ": " : "";
+                    std::string image_prefix = prompt + img_prompt + label + "<|vision_start|>";
                     std::vector<int> prefix_tokens;
                     if (!tokenizer->encode(image_prefix, prefix_tokens, nullptr)) {
                         return {};
@@ -3047,7 +3053,7 @@ struct LLMEmbedder : public Conditioner {
                     }
                     image_embeds.emplace_back(image_embed_idx, image_embed);
 
-                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+                    img_prompt += label + "<|vision_start|>";
                     img_prompt += placeholder;
                     img_prompt += "<|vision_end|>";
                 }

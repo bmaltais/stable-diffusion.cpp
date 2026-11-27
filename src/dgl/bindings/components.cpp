@@ -78,6 +78,7 @@ namespace sd::dgl {
         options.height    = int(get_int(args, "height"));
         options.clip_skip = int(get_int(args, "clip_skip"));
         options.raw       = get_bool(args, "raw");
+        options.image_labels = get_bool(args, "image_labels");
         if (args.count("system"))
             options.system = get_string(args, "system");
         if (options.raw && (args.count("media") || args.count("image_bindings")))

@@ -101,6 +101,7 @@ namespace sd::dgl::ops {
         params.clip_skip     = options.clip_skip;
         params.raw           = options.raw;
         params.system_prompt = options.system;
+        params.image_labels  = options.image_labels;
         if (!images.empty())
             params.ref_images = &images;
         if (!presentations.empty())

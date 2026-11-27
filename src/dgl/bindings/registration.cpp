@@ -473,7 +473,8 @@ namespace sd::dgl {
             {required("encoder", Kind::TextEncoder), required("text", Kind::String),
              integer("width", 1, 16384, 512), integer("height", 1, 16384, 512),
              integer("clip_skip", INT32_MIN, INT32_MAX, -1), optional("system", Kind::String),
-             optional("media", Kind::List), optional("image_bindings", Kind::Dict), optional("raw", Kind::Boolean, false)},
+             optional("media", Kind::List), optional("image_bindings", Kind::Dict), optional("raw", Kind::Boolean, false),
+             optional("image_labels", Kind::Boolean, true)},
             condition_signature(),
             encode_prompt);
         OutputSignature zeroed_condition{Kind::Dict};
@@ -580,6 +581,8 @@ namespace sd::dgl {
              optional_list("reference_blocks", Kind::Dict), optional_list("keyframe_indices", Kind::Integer),
              choice("ref_index_mode", {"fixed", "increase", "decrease"}, "fixed"), optional("force_ref_timestep_zero", Kind::Boolean, false),
              choice("ref_rope_anchor", {"default", "image_start", "text_start"}, "default"),
+             optional("krea2_edit", Kind::Boolean, false), optional_list("ref_boosts", Kind::Number),
+             optional_list("ref_positions", Kind::String),
              number("guidance", 0, 1000, 3.5), optional_list("skip_layers", Kind::Integer),
              optional("vace_context", Kind::Tensor), number("vace_strength", 0, 100, 1),
              optional("audio_embedding", Kind::Tensor), optional("video_positions", Kind::Tensor),

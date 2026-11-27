@@ -168,6 +168,22 @@ namespace sd {
         // vision on when the text encoder has it) or "moss-image-edit" (text_start anchor, VAE references only,
         // no vision). Other models ignore it.
         const char* moss_edit_format{};
+        // Krea 2 edit layout: "" or "ostris" (the library's own: references at timestep 0, at most a megapixel,
+        // "Picture N:" vision blocks at their own size) or "krea2edit" (the layout of the Krea 2 Identity Edit and
+        // General Edit LoRAs, ComfyUI-Krea2Edit: references at the current timestep, fitted to the output grid and
+        // centred on it, vision blocks without labels at most `krea2_grounding_px` on the long side). Other models
+        // ignore it, and so do the options below unless it is "krea2edit".
+        const char* krea2_edit_format{};
+        // Attention boost of the output on a reference (1: none): the last reference (the person, or the only one)
+        // and the first of two (the scene).
+        float krea2_ref_boost{1.f};
+        float krea2_ref_boost_a{1.f};
+        // Where a reference sits on the RoPE height/width axes: "" or "aligned" (on the output), "beside" (right of
+        // it), "bag" (every token at the output's centre). Last reference and first of two, as the boosts.
+        const char* krea2_ref_position{};
+        const char* krea2_ref_position_a{};
+        // The long side of each reference the vision encoder sees (0: as it came).
+        int krea2_grounding_px{768};
     };
 
     struct ImageConfig {

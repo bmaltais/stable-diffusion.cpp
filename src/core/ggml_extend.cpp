@@ -716,7 +716,9 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* runner_ctx,
                 mask_in = ggml_repeat(ctx, mask_in,
                                       ggml_new_tensor_4d(ctx, mask_in->type, mask_in->ne[0], L_q, mask_in->ne[2], mask_in->ne[3]));
             }
-            mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
+            if (mask_in->type != GGML_TYPE_F16) {
+                mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
+            }
         }
 
         auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale / kv_scale, 0, 0);

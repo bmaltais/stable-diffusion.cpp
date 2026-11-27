@@ -464,6 +464,12 @@ static void add_fugue_specs(std::vector<ParamSpec>& specs) {
     fugue.number("fugue.variation_strength", &sd::FugueStageConfig::variation_strength, 0, 1);
     fugue.string("ref_image_args", &sd::FugueStageConfig::ref_image_args);
     fugue.string("moss_edit_format", &sd::FugueStageConfig::moss_edit_format);
+    fugue.string("krea2_edit_format", &sd::FugueStageConfig::krea2_edit_format);
+    fugue.number("krea2_ref_boost", &sd::FugueStageConfig::krea2_ref_boost, 0, 1000);
+    fugue.number("krea2_ref_boost_a", &sd::FugueStageConfig::krea2_ref_boost_a, 0, 1000);
+    fugue.string("krea2_ref_position", &sd::FugueStageConfig::krea2_ref_position);
+    fugue.string("krea2_ref_position_a", &sd::FugueStageConfig::krea2_ref_position_a);
+    fugue.integer("krea2_grounding_px", &sd::FugueStageConfig::krea2_grounding_px, 0, 16384);
 }
 
 static void add_tiling_specs(std::vector<ParamSpec>& specs) {

@@ -38,6 +38,55 @@ namespace sd::api {
         throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "moss_edit_format supports only ai-toolkit or moss-image-edit");
     }
 
+    // krea2_edit_format: "" or "ostris" keep the library's Krea 2 edit layout; "krea2edit" is the layout of the Krea 2
+    // Identity Edit and General Edit LoRAs, ported from ComfyUI-Krea2Edit (Apache-2.0, github.com/lbouaraba/comfyui-krea2edit,
+    // v2.0.0): see krea2_fit, image_references and Krea2DiffusionExtra.
+    static bool krea2_edit_layout(SDVersion version, const char* format) {
+        const std::string value = format ? format : "";
+        if (value.empty() || value == "ostris")
+            return false;
+        if (value != "krea2edit")
+            throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "krea2_edit_format supports only ostris or krea2edit");
+        return sd_version_is_krea2(version);
+    }
+
+    static std::string krea2_position(const char* value, const char* option) {
+        const std::string position = value && *value ? value : "aligned";
+        if (position != "aligned" && position != "beside" && position != "bag")
+            throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, std::string(option) + " supports only aligned, beside or bag");
+        return position;
+    }
+
+    // How a Krea 2 Edit reference fits the output (ComfyUI-Krea2Edit's _fit_encode_image, fit_mode "fit"): a picture
+    // within 8% of the output's aspect fills it exactly after a centre crop; any other is fitted inside it, each side
+    // floored to 16 and the picture cut from the middle so that the fitted side lands on that grid at the same scale
+    // (no squash). The diffusion model centres a smaller reference on the output's grid.
+    struct Krea2Fit {
+        int crop_x, crop_y, crop_width, crop_height, width, height;
+    };
+
+    static Krea2Fit krea2_fit(int iw, int ih, int pw, int ph) {
+        const auto round_half_even = [](double value) { return int(std::nearbyint(value)); };
+        const double sc     = std::min(double(ph) / ih, double(pw) / iw);
+        constexpr double kCropTolerance = 0.08;
+        Krea2Fit fit{};
+        if (ih * sc >= ph * (1 - kCropTolerance) && iw * sc >= pw * (1 - kCropTolerance)) {
+            const double s  = std::max(double(ph) / ih, double(pw) / iw);
+            fit.crop_height = std::min(ih, round_half_even(ph / s));
+            fit.crop_width  = std::min(iw, round_half_even(pw / s));
+            fit.width       = pw;
+            fit.height      = ph;
+        } else {
+            fit.height      = std::min(std::max(16, int(ih * sc) / 16 * 16), std::max(16, ph / 16 * 16));
+            fit.width       = std::min(std::max(16, int(iw * sc) / 16 * 16), std::max(16, pw / 16 * 16));
+            fit.crop_height = std::min(ih, std::max(1, round_half_even(fit.height / sc)));
+            fit.crop_width  = std::min(iw, std::max(1, round_half_even(fit.width / sc)));
+        }
+        fit.crop_x = (iw - fit.crop_width) / 2;
+        fit.crop_y = (ih - fit.crop_height) / 2;
+        return fit;
+    }
+
     static std::string reference_pixels(GenerationTemplate& request, const sd_tensor_t* tensor, size_t index, bool encode) {
         const auto version = request.definition.version;
         const auto name    = "reference_" + std::to_string(index);
@@ -46,6 +95,14 @@ namespace sd::api {
         const int target_width = request.values.at("width"), target_height = request.values.at("height");
         const int factor = sd_version_is_qwen_image(version) ? 32 : 16;
         bool crop_only   = false;
+        if (krea2_edit_layout(version, request.image.fugue.krea2_edit_format)) {
+            const auto fit    = krea2_fit(width, height, target_width, target_height);
+            const auto pixels = name + "_pixels";
+            LOG_INFO("reference %zu: %dx%d -> %dx%d before the VAE (Krea 2 Edit fit, crop %dx%d at %d,%d)", index, width, height,
+                     fit.width, fit.height, fit.crop_width, fit.crop_height, fit.crop_x, fit.crop_y);
+            request.fields["references"] += request.render("image_reference", {{"name", name}, {"channels", request.definition.geometry.image_channels}, {"width", fit.width}, {"height", fit.height}, {"fit_crop", true}, {"center_crop", false}, {"crop_only", false}, {"resize_width", fit.width}, {"resize_height", fit.height}, {"crop_x", fit.crop_x}, {"crop_y", fit.crop_y}, {"crop_width", fit.crop_width}, {"crop_height", fit.crop_height}, {"mode", literal("bicubic")}, {"encode", encode}, {"augment", false}, {"latent", "reference_latent_" + std::to_string(index)}});
+            return pixels;
+        }
         if (version == VERSION_P_H3_IMAGE || version == VERSION_MINIMAX_H3_IMAGE) {
             const double scale = version == VERSION_P_H3_IMAGE ? std::min(1.0, std::sqrt(double(target_width) * target_height / (double(width) * height))) : double(std::clamp(std::min(width, height), 1024, 2048)) / std::min(width, height);
             width              = std::max(32, int(std::nearbyint(width * scale / 32)) * 32);
@@ -80,7 +137,7 @@ namespace sd::api {
         const auto scale         = crop_only ? 1.0 : std::max(double(width) / sd_tensor_dim(tensor, 1), double(height) / sd_tensor_dim(tensor, 2));
         const auto resize_width  = int(std::ceil(sd_tensor_dim(tensor, 1) * scale));
         const auto resize_height = int(std::ceil(sd_tensor_dim(tensor, 2) * scale));
-        request.fields["references"] += request.render("image_reference", {{"name", name}, {"channels", request.definition.geometry.image_channels}, {"width", width}, {"height", height}, {"center_crop", version == VERSION_FIBO2 || crop_only}, {"crop_only", crop_only}, {"resize_width", resize_width}, {"resize_height", resize_height}, {"crop_x", (resize_width - width) / 2}, {"crop_y", (resize_height - height) / 2}, {"mode", literal(sd_version_is_minimax_h3_image(version) ? "lanczos" : "bilinear")}, {"encode", encode}, {"augment", version == VERSION_MINIMAX_H3_IMAGE}, {"latent", "reference_latent_" + std::to_string(index)}});
+        request.fields["references"] += request.render("image_reference", {{"name", name}, {"channels", request.definition.geometry.image_channels}, {"width", width}, {"height", height}, {"fit_crop", false}, {"center_crop", version == VERSION_FIBO2 || crop_only}, {"crop_only", crop_only}, {"resize_width", resize_width}, {"resize_height", resize_height}, {"crop_x", (resize_width - width) / 2}, {"crop_y", (resize_height - height) / 2}, {"crop_width", width}, {"crop_height", height}, {"mode", literal(sd_version_is_minimax_h3_image(version) ? "lanczos" : "bilinear")}, {"encode", encode}, {"augment", version == VERSION_MINIMAX_H3_IMAGE}, {"latent", "reference_latent_" + std::to_string(index)}});
         return pixels;
     }
 
@@ -108,6 +165,7 @@ namespace sd::api {
         const bool qwen_edit  = sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_LAYERED;
         const bool moss_layout = moss_edit && moss_image_edit_layout(request.image.fugue.moss_edit_format);
         const bool has_vision  = (moss_edit || qwen_edit) && !moss_layout && prompt_has_vision(request);
+        const bool krea2_edit  = krea2_edit_layout(version, request.image.fugue.krea2_edit_format);
         if (moss_layout)
             LOG_INFO("MOSS-Image edit layout moss-image-edit: %zu reference(s) through the VAE only, text_start anchor, no vision", refs.size());
         else if (moss_edit && !has_vision)
@@ -119,7 +177,21 @@ namespace sd::api {
             const auto latent = "reference_latent_" + std::to_string(i);
             if (encode)
                 latents += (latents.empty() ? "" : ", ") + latent;
-            const auto prompt_image = version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_FIBO2 || sd_version_is_llada_image(version) ? image : "reference_" + std::to_string(i) + "_original";
+            auto prompt_image = version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_FIBO2 || sd_version_is_llada_image(version) ? image : "reference_" + std::to_string(i) + "_original";
+            if (krea2_edit) {
+                // The vision encoder sees each reference at most krea2_grounding_px on the long side (ComfyUI-Krea2Edit's
+                // grounding_px, an area downscale there, never up), whatever its size before the VAE.
+                const int limit = request.image.fugue.krea2_grounding_px;
+                const int w = int(sd_tensor_dim(refs[i], 1)), h = int(sd_tensor_dim(refs[i], 2));
+                if (limit > 0 && std::max(w, h) > limit) {
+                    const double s     = double(limit) / std::max(w, h);
+                    const int gw       = std::max(1, int(std::nearbyint(w * s))), gh = std::max(1, int(std::nearbyint(h * s)));
+                    const auto grounded = "reference_" + std::to_string(i) + "_grounded";
+                    request.fields["references"] += "    " + grounded + " = tensor::interpolate(" + prompt_image + ", size = [" +
+                                                    std::to_string(gw) + ", " + std::to_string(gh) + "], mode = \"bilinear\", antialias = true)\n";
+                    prompt_image = grounded;
+                }
+            }
             pixels += (pixels.empty() ? "" : ", ") + prompt_image;
         }
         if (sd_version_is_minimax_h3_image(version)) {
@@ -136,6 +208,10 @@ namespace sd::api {
             request.fields["prompt_options"] += ", media = [" + pixels + "]";
             if (!sd_version_is_llada_image(version) && version != VERSION_FIBO2)
                 request.fields["negative_prompt_options"] += ", media = [" + pixels + "]";
+            if (krea2_edit) {
+                request.fields["prompt_options"] += ", image_labels = false";
+                request.fields["negative_prompt_options"] += ", image_labels = false";
+            }
         }
         if (encode && !sd_version_is_unet_edit(version)) {
             const bool increase = sd_version_is_flux2(version) || sd_version_is_flux3(version) ||
@@ -145,7 +221,23 @@ namespace sd::api {
             std::string options = ", ref_latents = [" + latents + "], ref_index_mode = " +
                                   literal(version == VERSION_QWEN_IMAGE_LAYERED ? "decrease" : increase ? "increase"
                                                                                                         : "fixed") +
-                                  ", force_ref_timestep_zero = " + literal(sd_version_is_llada_image(version) || sd_version_is_krea2(version) || moss_edit);
+                                  ", force_ref_timestep_zero = " + literal(sd_version_is_llada_image(version) || (sd_version_is_krea2(version) && !krea2_edit) || moss_edit);
+            if (krea2_edit) {
+                // The last reference is the person (or the only one), an earlier one the scene: ComfyUI-Krea2Edit's
+                // ref_boost/ref_position and ref_boost_a/ref_position_a.
+                const auto& fugue = request.image.fugue;
+                std::vector<float> boosts;
+                std::vector<std::string> positions;
+                for (size_t i = 0; i < refs.size(); ++i) {
+                    const bool last = i + 1 == refs.size();
+                    boosts.push_back(last ? fugue.krea2_ref_boost : fugue.krea2_ref_boost_a);
+                    positions.push_back(last ? krea2_position(fugue.krea2_ref_position, "krea2_ref_position")
+                                             : krea2_position(fugue.krea2_ref_position_a, "krea2_ref_position_a"));
+                }
+                LOG_INFO("Krea 2 Edit layout: %zu reference(s) at the current timestep, boosts %s, positions %s, vision at most %d px",
+                         refs.size(), nlohmann::json(boosts).dump().c_str(), nlohmann::json(positions).dump().c_str(), fugue.krea2_grounding_px);
+                options += ", krea2_edit = true, ref_boosts = " + literal(nlohmann::json(boosts)) + ", ref_positions = " + literal(nlohmann::json(positions));
+            }
             if (moss_edit)
                 options += moss_layout ? ", ref_rope_anchor = \"text_start\"" : ", ref_rope_anchor = \"image_start\"";
             request.fields["predictor_options"] += options;

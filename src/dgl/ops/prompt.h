@@ -25,6 +25,8 @@ namespace sd::dgl::ops {
         int height    = 512;
         int clip_skip = -1;
         bool raw      = false;
+        // Krea 2: false drops the "Picture N: " text before each reference's vision block (the Krea 2 Edit layout).
+        bool image_labels = true;
         std::optional<std::string> system;
         std::optional<std::vector<PromptMedia>> media;
         // An empty tensor means the image has no host binding and should be read from its path.

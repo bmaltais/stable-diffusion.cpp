@@ -142,6 +142,25 @@ namespace sd::dgl {
         output.options.ref_rope_anchor = ref_rope_anchor == "image_start"  ? Rope::RefRoPEAnchor::IMAGE_START
                                          : ref_rope_anchor == "text_start" ? Rope::RefRoPEAnchor::TEXT_START
                                                                            : Rope::RefRoPEAnchor::MODEL_DEFAULT;
+        output.options.krea2_edit = get_bool(args, "krea2_edit");
+        if ((output.options.krea2_edit || args.count("ref_boosts") || args.count("ref_positions")) && !sd_version_is_krea2(engine.version()))
+            throw std::runtime_error("krea2_edit, ref_boosts and ref_positions are for Krea 2");
+        if (args.count("ref_boosts")) {
+            for (const auto& item : args.at("ref_boosts").items) {
+                const auto boost = item.scalar.get<float>();
+                if (!(boost >= 0.f && boost <= 1000.f))
+                    throw std::runtime_error("ref_boosts values must be between zero and 1000");
+                output.options.ref_boosts.push_back(boost);
+            }
+        }
+        if (args.count("ref_positions")) {
+            for (const auto& item : args.at("ref_positions").items) {
+                const auto position = item.scalar.get<std::string>();
+                if (position != "aligned" && position != "beside" && position != "bag")
+                    throw std::runtime_error("ref_positions values are aligned, beside or bag");
+                output.options.ref_positions.push_back(position == "aligned" ? 0 : position == "beside" ? 1 : 2);
+            }
+        }
         output.options.guidance        = float(get_number(args, "guidance"));
         bind_predictor_options(output, args);
         const auto& condition = args.at("condition").fields;

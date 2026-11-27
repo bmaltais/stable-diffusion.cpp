@@ -59,7 +59,7 @@ class ConditioningCache {
 
     static bool same_params(const ConditionerParams& a, const ConditionerParams& b) {
         const auto fields = [](const ConditionerParams& p) {
-            return std::tie(p.text, p.system_prompt, p.raw, p.clip_skip, p.width, p.height, p.zero_out_masked);
+            return std::tie(p.text, p.system_prompt, p.raw, p.clip_skip, p.width, p.height, p.zero_out_masked, p.image_labels);
         };
         if (fields(a) != fields(b) ||
             !same_textual_inversion(a.textual_inversion, b.textual_inversion) ||

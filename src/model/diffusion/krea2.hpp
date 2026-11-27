@@ -437,7 +437,8 @@ namespace Krea2 {
                              ggml_tensor* vec,
                              ggml_tensor* pe,
                              ggml_tensor* vec_refs = nullptr,
-                             int64_t ref_start     = -1) {
+                             int64_t ref_start     = -1,
+                             ggml_tensor* mask     = nullptr) {
             auto mod      = std::dynamic_pointer_cast<KreaDoubleSharedModulation>(blocks["mod"]);
             auto prenorm  = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["prenorm"]);
             auto postnorm = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["postnorm"]);
@@ -468,7 +469,7 @@ namespace Krea2 {
 
                 auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
 
-                auto attn_out = attn->forward(ctx, attn_input, pe);
+                auto attn_out = attn->forward(ctx, attn_input, pe, mask);
 
                 auto attn_out_main = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_main, B, attn_out->nb[1], attn_out->nb[2], 0);
                 auto attn_out_refs = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_refs, B, attn_out->nb[1], attn_out->nb[2], len_main * attn_out->nb[1]);
@@ -506,7 +507,7 @@ namespace Krea2 {
                                                  mods[1],
                                                  mods[0],
                                                  true);
-                auto attn_out   = attn->forward(ctx, attn_input, pe);
+                auto attn_out   = attn->forward(ctx, attn_input, pe, mask);
                 x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
 
                 auto mlp_input = Flux::modulate(ctx,
@@ -630,7 +631,8 @@ namespace Krea2 {
                              ggml_tensor* context,
                              ggml_tensor* pe,
                              std::vector<ggml_tensor*> ref_latents = {},
-                             bool zero_timestep_refs               = false) {
+                             bool zero_timestep_refs               = false,
+                             ggml_tensor* attn_mask                = nullptr) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
             int64_t N = x->ne[3];
@@ -677,7 +679,7 @@ namespace Krea2 {
             int64_t ref_start  = hidden_states->ne[1] - ref_len;
             for (int i = 0; i < config.layers; ++i) {
                 auto block    = std::dynamic_pointer_cast<KreaSingleStreamBlock>(blocks["blocks." + std::to_string(i)]);
-                hidden_states = block->forward(ctx, hidden_states, tvec, pe, tvec_0, ref_start);
+                hidden_states = block->forward(ctx, hidden_states, tvec, pe, tvec_0, ref_start, attn_mask);
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "krea2.blocks." + std::to_string(i), "hidden_states");
             }
 
@@ -696,14 +698,46 @@ namespace Krea2 {
                                                    float theta,
                                                    const std::vector<int>& axes_dim,
                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                   Rope::RefIndexMode ref_index_mode) {
+                                                   Rope::RefIndexMode ref_index_mode,
+                                                   bool edit_layout                  = false,
+                                                   const std::vector<int>& positions = {}) {
         Rope::Embedding result;
         result.batch_size = bs;
         result.positions.append_tokens(context_len);
         auto txt_ids = Rope::gen_flux_txt_ids(bs, context_len, 3, {});
         auto img_ids = Rope::gen_flux_img_ids(h, w, patch_size, bs, 3, 0, 0, 0, false, &result.positions);
         auto ids     = Rope::concat_ids(txt_ids, img_ids, bs);
-        if (ref_latents.size() > 0) {
+        if (edit_layout && ref_latents.size() > 0) {
+            // The Krea 2 Edit layout, ported from ComfyUI-Krea2Edit (Apache-2.0, github.com/lbouaraba/comfyui-krea2edit,
+            // _imgids_offset and _place_refs): reference i is frame i + 1, centred on the output's grid at a fractional
+            // offset when it is smaller (RoPE is continuous), then aligned (as trained), beside (shifted right of the
+            // output and of earlier beside references) or a bag of features (every token at the output's centre).
+            const int th = (h + patch_size / 2) / patch_size, tw = (w + patch_size / 2) / patch_size;
+            float beside_x = float(tw);
+            for (size_t i = 0; i < ref_latents.size(); ++i) {
+                ggml_tensor* ref = ref_latents[i];
+                auto ref_ids     = Rope::gen_flux_img_ids(static_cast<int>(ref->ne[1]), static_cast<int>(ref->ne[0]), patch_size, bs, 3,
+                                                          static_cast<int>(i + 1), 0, 0, false, &result.positions);
+                const int gh = (static_cast<int>(ref->ne[1]) + patch_size / 2) / patch_size;
+                const int gw = (static_cast<int>(ref->ne[0]) + patch_size / 2) / patch_size;
+                const float off_h = std::max(0.f, (th - gh) / 2.f), off_w = std::max(0.f, (tw - gw) / 2.f);
+                const int position = i < positions.size() ? positions[i] : 0;
+                float max_x        = beside_x;
+                for (auto& id : ref_ids) {
+                    if (position == 2) {
+                        id[1] = (th - 1) / 2.f;
+                        id[2] = (tw - 1) / 2.f;
+                        continue;
+                    }
+                    id[1] += off_h;
+                    id[2] = position == 1 ? id[2] + beside_x : id[2] + off_w;
+                    max_x = std::max(max_x, id[2]);
+                }
+                if (position == 1)
+                    beside_x = max_x + 1.f;
+                ids = Rope::concat_ids(ids, ref_ids, bs);
+            }
+        } else if (ref_latents.size() > 0) {
             auto refs_ids = Rope::gen_refs_ids(patch_size, bs, 3, 1, ref_latents, ref_index_mode, 1.0f, false, 0, &result.positions);
             ids           = Rope::concat_ids(ids, refs_ids, bs);
         }
@@ -716,6 +750,44 @@ namespace Krea2 {
         sd::PECache pe_cache_;
         Krea2Config config;
         Krea2Model model;
+        // The Krea 2 Edit attention boost (ComfyUI-Krea2Edit's _ref_attn_bias): an additive bias of log(boost) on the
+        // output tokens' attention logits to each reference's tokens, the same as scaling those keys' attention weight
+        // before the softmax renormalises; kept while the token counts and the boosts stay.
+        sd::Tensor<ggml_fp16_t> boost_mask_;
+        std::vector<float> boost_mask_key_;
+
+        const sd::Tensor<ggml_fp16_t>* boost_mask(int64_t txt_len, int64_t img_len, const std::vector<int64_t>& ref_lens,
+                                                  const std::vector<float>& boosts) {
+            bool any = false;
+            for (size_t i = 0; i < ref_lens.size() && i < boosts.size(); ++i)
+                any = any || boosts[i] != 1.f;
+            if (!any)
+                return nullptr;
+            std::vector<float> key{float(txt_len), float(img_len)};
+            for (size_t i = 0; i < ref_lens.size(); ++i) {
+                key.push_back(float(ref_lens[i]));
+                key.push_back(i < boosts.size() ? boosts[i] : 1.f);
+            }
+            if (key != boost_mask_key_) {
+                int64_t total = txt_len + img_len;
+                for (int64_t len : ref_lens)
+                    total += len;
+                boost_mask_ = sd::Tensor<ggml_fp16_t>({total, total});
+                std::fill(boost_mask_.data(), boost_mask_.data() + total * total, ggml_fp32_to_fp16(0.f));
+                int64_t col = txt_len + img_len;
+                for (size_t i = 0; i < ref_lens.size(); ++i) {
+                    const float boost = i < boosts.size() ? boosts[i] : 1.f;
+                    if (boost != 1.f) {
+                        const ggml_fp16_t bias = ggml_fp32_to_fp16(std::log(std::max(boost, 1e-4f)));
+                        for (int64_t row = txt_len; row < txt_len + img_len; ++row)
+                            std::fill(boost_mask_.data() + row * total + col, boost_mask_.data() + row * total + col + ref_lens[i], bias);
+                    }
+                    col += ref_lens[i];
+                }
+                boost_mask_key_ = std::move(key);
+            }
+            return &boost_mask_;
+        }
 
         Krea2Runner(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -740,7 +812,8 @@ namespace Krea2 {
                                  const sd::Tensor<float>& context_tensor,
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
                                  Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED,
-                                 bool force_ref_timestep_zero                             = false) {
+                                 bool force_ref_timestep_zero                             = false,
+                                 const Krea2DiffusionExtra* edit                          = nullptr) {
             ggml_cgraph* gf        = new_graph_custom(KREA2_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -758,6 +831,10 @@ namespace Krea2 {
             pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
             pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
             pe_key.add(ref_index_mode);
+            const bool edit_layout = edit != nullptr && edit->edit_layout;
+            static const std::vector<int> no_positions;
+            const auto& positions = edit_layout && edit->positions ? *edit->positions : no_positions;
+            pe_key.add(edit_layout).add(positions);
             auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
                 auto pe_vec = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
                                                           static_cast<int>(x->ne[0]),
@@ -767,13 +844,27 @@ namespace Krea2 {
                                                           config.theta,
                                                           config.axes_dim,
                                                           ref_latents,
-                                                          ref_index_mode));
+                                                          ref_index_mode,
+                                                          edit_layout,
+                                                          positions));
                 int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
                 return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
             }));
 
+            ggml_tensor* attn_mask = nullptr;
+            if (edit_layout && edit->boosts && !ref_latents.empty()) {
+                const auto tokens = [&](ggml_tensor* t) {
+                    return int64_t((t->ne[1] + config.patch_size / 2) / config.patch_size) * ((t->ne[0] + config.patch_size / 2) / config.patch_size);
+                };
+                std::vector<int64_t> ref_lens;
+                for (ggml_tensor* ref : ref_latents)
+                    ref_lens.push_back(tokens(ref));
+                if (const auto* mask = boost_mask(context->ne[1], tokens(x), ref_lens, *edit->boosts))
+                    attn_mask = make_input(*mask);
+            }
+
             auto runner_ctx  = get_context();
-            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, force_ref_timestep_zero);
+            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, force_ref_timestep_zero, attn_mask);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
@@ -784,9 +875,10 @@ namespace Krea2 {
                                   const sd::Tensor<float>& context,
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
                                   Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED,
-                                  bool force_ref_timestep_zero                      = false) {
+                                  bool force_ref_timestep_zero                      = false,
+                                  const Krea2DiffusionExtra* edit                   = nullptr) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, force_ref_timestep_zero);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, force_ref_timestep_zero, edit);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
@@ -801,7 +893,8 @@ namespace Krea2 {
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
                            diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_index_mode, diffusion_params.force_ref_timestep_zero);
+                           diffusion_params.ref_index_mode, diffusion_params.force_ref_timestep_zero,
+                           std::get_if<Krea2DiffusionExtra>(&diffusion_params.extra));
         }
     };
 }  // namespace Krea2
