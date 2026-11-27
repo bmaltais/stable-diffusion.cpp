@@ -156,6 +156,11 @@ managed budget. This planning headroom absorbs small allocation estimate changes
 subsequent capacity checks can consume it while still preserving the 512 MiB device
 scratch reserve and respecting the managed budget.
 
+The choice sees the free memory of one moment. Another process can take device memory
+before the graph's weights are staged, so staging all of them can leave too little for
+the compute buffer. A graph with cut markers that runs short this way before it starts
+executing is run again segmented, streaming its weights, instead of failing.
+
 - `--max-vram <GiB>` optionally lowers the live-memory limit. A positive value is a managed per-device budget, `0` uses the device's current free memory without an explicit budget, and a negative value snapshots free memory at startup while reserving that many GiB (`--max-vram -1` reserves about 1 GiB). Driver contexts and unrelated external allocations remain outside the managed budget.
 - `--disable-prefetch` disables asynchronous next-segment prefetch while retaining synchronous loading, eviction, and segmented execution.
 - `--disable-segmented-compute` forces monolithic graph execution for diagnostics or compatibility, even when the automatic memory check would select segments.

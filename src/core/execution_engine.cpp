@@ -44,6 +44,7 @@ namespace sd {
         std::shared_ptr<DeviceResidencyManager> manager_;
         std::unordered_set<const ggml_tensor*> params_tensor_set_;
         ggml_status last_compute_status_ = GGML_STATUS_FAILED;
+        bool executed_                   = false;  // run_plan reached a segment's execution
         Tensor<float> output_;
 
         using GraphCutPlan = ggml_graph_cut::Plan;
@@ -62,6 +63,9 @@ namespace sd {
         bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params, bool allow_reclamation = false) const;
         bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
         bool execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
+        // Runs the plan's segments in order; can_fall_back makes a memory shortage found before the first segment
+        // ran a warning, for execute_graph to retry with streamed weights.
+        bool run_plan(ggml_cgraph* graph, const ggml_graph_cut::Plan& plan, bool segmented, bool can_fall_back, const ComputeWorkspace::Measurement& full_measurement, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
         bool is_multi_device() const { return !session_.extra_backends_.empty(); }
         size_t retained_runtime_buffer_bytes(ggml_backend_t backend) const { return session_.resident_bytes(backend); }
         void sync_runtime_residency() { engine_.sync_residency(session_); }
@@ -574,8 +578,8 @@ namespace sd {
                 segmented = !fits(requests, params, true);
             }
         }
-        ggml_graph_cut::Plan monolithic_plan;
         if (!segmented) {
+            ggml_graph_cut::Plan monolithic_plan;
             monolithic_plan.segments.emplace_back();
             auto& segment               = monolithic_plan.segments.back();
             segment.group_name          = "graph";
@@ -594,8 +598,28 @@ namespace sd {
                                        : ggml_graph_cut::Segment::INPUT_EXTERNAL;
                 segment.input_refs.push_back(input);
             }
+            // The check above sees the free memory of one moment: another process can take some before
+            // this graph's weights are staged, and staging all of them can then leave too little for its
+            // compute buffer. Streaming the weights segment by segment needs far less, so a shortage
+            // found before the graph ran is retried that way instead of failing the computation.
+            const auto failure_before = current_compute_failure();
+            if (run_plan(graph, monolithic_plan, false, can_segment, full_measurement, n_threads, no_return, read_outputs)) {
+                return true;
+            }
+            if (!can_segment || executed_ || !current_compute_failure().out_of_memory) {
+                return false;
+            }
+            LOG_WARN("%s: not enough memory for the whole graph at once, streaming its weights in %zu segments instead",
+                     task_.description.c_str(), cached_plan.segments.size());
+            current_compute_failure() = failure_before;
+            sync_runtime_residency();
         }
-        const auto& plan            = segmented ? cached_plan : monolithic_plan;
+        return run_plan(graph, cached_plan, true, false, full_measurement, n_threads, no_return, read_outputs);
+    }
+
+    bool GraphExecution::run_plan(ggml_cgraph* graph, const ggml_graph_cut::Plan& plan, bool segmented, bool can_fall_back, const ComputeWorkspace::Measurement& full_measurement, int n_threads, bool no_return, const std::function<bool()>& read_outputs) {
+        auto manager                = manager_;
+        executed_                   = false;
         const bool segments_changed = plan.segments.size() != session_.logged_segment_count_;
         if (segments_changed && (segmented || session_.logged_segment_count_ > 1)) {
             LOG_VERBOSE("%s using %zu segment%s", task_.description.c_str(),
@@ -619,8 +643,13 @@ namespace sd {
             auto fail_segment   = [&](const char* phase) {
                 const auto step = sd_format("%s segment %zu/%zu (%s) failed during %s", task_.description.c_str(),
                                             index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
-                LOG_ERROR("%s", step.c_str());
                 note_compute_failure(step, last_compute_status_ == GGML_STATUS_ALLOC_FAILED);
+                // execute_graph retries a shortage found before the graph ran with streamed weights.
+                if (can_fall_back && !executed_ && current_compute_failure().out_of_memory) {
+                    LOG_WARN("%s", step.c_str());
+                } else {
+                    LOG_ERROR("%s", step.c_str());
+                }
                 return false;
             };
             session_.cut_cache_.prune(segment.live_cut_names);
@@ -730,6 +759,7 @@ namespace sd {
             }
             LOG_DEBUG("%s executing segment %zu/%zu: %s", task_.description.c_str(),
                       index + 1, plan.segments.size(), segment.group_name.c_str());
+            executed_ = true;
             if (!execute_segment(segment_graph, n_threads, [&]() { weights.submit_next(); })) {
                 return fail_segment("execution");
             }
