@@ -820,9 +820,10 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             ggml_backend_buffer_t compute_buffer =
                 ggml_backend_alloc_ctx_tensors_from_buft(staging_ctx, staging_buft);
             if (compute_buffer == nullptr) {
-                LOG_ERROR("model manager alloc compute params backend buffer failed, num_tensors = %zu",
-                          staged_tensors.size());
-                // Out of memory, which the execution engine can answer by streaming the weights.
+                // Out of memory, which the execution engine can answer by streaming the weights: a warning, as
+                // the engine logs the error when it cannot.
+                LOG_WARN("model manager alloc compute params backend buffer failed, num_tensors = %zu",
+                         staged_tensors.size());
                 sd::note_compute_failure(sd_format("staging %.2f MB of weights to %s failed", bytes / (1024.0 * 1024.0),
                                                    ggml_backend_name(compute_backend)),
                                          true);
