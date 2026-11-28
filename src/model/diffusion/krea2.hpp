@@ -771,8 +771,8 @@ namespace Krea2 {
             }
             if (auto found = boost_masks_.find(key); found != boost_masks_.end())
                 return &found->second;
-            // A run needs one or two (positive, negative); a few more would only mean a changed layout.
-            constexpr size_t kMaxMasks = 4;
+            // A run needs one or two (positive, negative); a third key means the layout changed, so the old ones go.
+            constexpr size_t kMaxMasks = 2;
             if (boost_masks_.size() >= kMaxMasks)
                 boost_masks_.clear();
             int64_t total = txt_len + img_len;
