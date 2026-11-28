@@ -71,7 +71,14 @@ char* sd_fugue_inspect_model(const char* path) {
     } catch (...) {
         out = {{"error", "unknown failure"}};
     }
-    const std::string text = out.dump();
+    // A file name or an error text can hold bytes that are not UTF-8: dump replaces them instead of throwing, and a
+    // failure that still escapes must not cross the C API.
+    std::string text;
+    try {
+        text = out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    } catch (...) {
+        text = R"({"error":"cannot write the answer"})";
+    }
     char* copy             = static_cast<char*>(std::malloc(text.size() + 1));
     if (copy)
         std::memcpy(copy, text.c_str(), text.size() + 1);
