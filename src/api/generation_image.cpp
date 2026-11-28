@@ -42,12 +42,15 @@ namespace sd::api {
     // Identity Edit and General Edit LoRAs, ported from ComfyUI-Krea2Edit (Apache-2.0, github.com/lbouaraba/comfyui-krea2edit,
     // v2.0.0): see krea2_fit, image_references and Krea2DiffusionExtra.
     static bool krea2_edit_layout(SDVersion version, const char* format) {
+        // Another model ignores the option, as it ignores the other Krea 2 ones.
+        if (!sd_version_is_krea2(version))
+            return false;
         const std::string value = format ? format : "";
         if (value.empty() || value == "ostris")
             return false;
         if (value != "krea2edit")
             throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "krea2_edit_format supports only ostris or krea2edit");
-        return sd_version_is_krea2(version);
+        return true;
     }
 
     static std::string krea2_position(const char* value, const char* option) {
@@ -180,7 +183,7 @@ namespace sd::api {
             auto prompt_image = version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_FIBO2 || sd_version_is_llada_image(version) ? image : "reference_" + std::to_string(i) + "_original";
             if (krea2_edit) {
                 // The vision encoder sees each reference at most krea2_grounding_px on the long side (ComfyUI-Krea2Edit's
-                // grounding_px, an area downscale there, never up), whatever its size before the VAE.
+                // grounding_px: an area downscale, never up, by comfy.utils.common_upscale), whatever its size before the VAE.
                 const int limit = request.image.fugue.krea2_grounding_px;
                 const int w = int(sd_tensor_dim(refs[i], 1)), h = int(sd_tensor_dim(refs[i], 2));
                 if (limit > 0 && std::max(w, h) > limit) {
@@ -188,7 +191,7 @@ namespace sd::api {
                     const int gw       = std::max(1, int(std::nearbyint(w * s))), gh = std::max(1, int(std::nearbyint(h * s)));
                     const auto grounded = "reference_" + std::to_string(i) + "_grounded";
                     request.fields["references"] += "    " + grounded + " = tensor::interpolate(" + prompt_image + ", size = [" +
-                                                    std::to_string(gw) + ", " + std::to_string(gh) + "], mode = \"bilinear\", antialias = true)\n";
+                                                    std::to_string(gw) + ", " + std::to_string(gh) + "], mode = \"area\")\n";
                     prompt_image = grounded;
                 }
             }

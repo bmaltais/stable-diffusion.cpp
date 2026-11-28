@@ -244,7 +244,7 @@ public:
 
     bool runner_started() const { return execution_session_.started(); }
 
-    void runner_end();
+    virtual void runner_end();
 
 public:
     virtual std::string get_desc() = 0;

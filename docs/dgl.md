@@ -1114,6 +1114,8 @@ fn main() {
 Use `mode="nearest_exact"` for half-pixel nearest-neighbor sampling.
 `mode="nearest_max"` uses nearest-neighbor sampling when enlarging and the
 maximum of each source region when shrinking, preserving active mask pixels.
+`mode="area"` averages the source pixels each output pixel covers, as PyTorch's
+`interpolate(mode="area")` (adaptive average pooling); `antialias` does not apply.
 
 ### Pixel formats
 

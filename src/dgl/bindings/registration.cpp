@@ -248,7 +248,7 @@ namespace sd::dgl {
         axes.required                   = false;
         registry["tensor::interpolate"] = make_operation(
             {tensor, int_vector_argument("size"), std::move(axes),
-             choice("mode", {"nearest", "nearest_exact", "nearest_max", "bilinear", "bicubic", "lanczos"}, "bilinear"),
+             choice("mode", {"nearest", "nearest_exact", "nearest_max", "bilinear", "bicubic", "lanczos", "area"}, "bilinear"),
              optional("antialias", Kind::Boolean, false)},
             {Kind::Tensor}, execute_tensor_interpolate);
     }

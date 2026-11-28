@@ -812,6 +812,10 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* runner_ctx,
         ggml_prec_set_acc(kq, GGML_PREC_F32);
         kq = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
+            // A mask kept in F16 for flash attention (Krea 2 Edit's boost): ggml-cpu cannot add F16 to F32 logits.
+            if (mask->type != GGML_TYPE_F32) {
+                mask = ggml_cast(ctx, mask, GGML_TYPE_F32);
+            }
             kq = ggml_add_inplace(ctx, kq, mask);
         }
         kq = ggml_soft_max_inplace(ctx, kq);

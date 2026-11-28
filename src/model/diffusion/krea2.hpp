@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -752,9 +753,9 @@ namespace Krea2 {
         Krea2Model model;
         // The Krea 2 Edit attention boost (ComfyUI-Krea2Edit's _ref_attn_bias): an additive bias of log(boost) on the
         // output tokens' attention logits to each reference's tokens, the same as scaling those keys' attention weight
-        // before the softmax renormalises; kept while the token counts and the boosts stay.
-        sd::Tensor<ggml_fp16_t> boost_mask_;
-        std::vector<float> boost_mask_key_;
+        // before the softmax renormalises. One mask per token layout and boosts: with CFG the positive and negative
+        // prompts differ in length, so each keeps its own for the whole sampling run; runner_end frees them.
+        std::map<std::vector<float>, sd::Tensor<ggml_fp16_t>> boost_masks_;
 
         const sd::Tensor<ggml_fp16_t>* boost_mask(int64_t txt_len, int64_t img_len, const std::vector<int64_t>& ref_lens,
                                                   const std::vector<float>& boosts) {
@@ -768,25 +769,35 @@ namespace Krea2 {
                 key.push_back(float(ref_lens[i]));
                 key.push_back(i < boosts.size() ? boosts[i] : 1.f);
             }
-            if (key != boost_mask_key_) {
-                int64_t total = txt_len + img_len;
-                for (int64_t len : ref_lens)
-                    total += len;
-                boost_mask_ = sd::Tensor<ggml_fp16_t>({total, total});
-                std::fill(boost_mask_.data(), boost_mask_.data() + total * total, ggml_fp32_to_fp16(0.f));
-                int64_t col = txt_len + img_len;
-                for (size_t i = 0; i < ref_lens.size(); ++i) {
-                    const float boost = i < boosts.size() ? boosts[i] : 1.f;
-                    if (boost != 1.f) {
-                        const ggml_fp16_t bias = ggml_fp32_to_fp16(std::log(std::max(boost, 1e-4f)));
-                        for (int64_t row = txt_len; row < txt_len + img_len; ++row)
-                            std::fill(boost_mask_.data() + row * total + col, boost_mask_.data() + row * total + col + ref_lens[i], bias);
-                    }
-                    col += ref_lens[i];
+            if (auto found = boost_masks_.find(key); found != boost_masks_.end())
+                return &found->second;
+            // A run needs one or two (positive, negative); a few more would only mean a changed layout.
+            constexpr size_t kMaxMasks = 4;
+            if (boost_masks_.size() >= kMaxMasks)
+                boost_masks_.clear();
+            int64_t total = txt_len + img_len;
+            for (int64_t len : ref_lens)
+                total += len;
+            sd::Tensor<ggml_fp16_t> mask({total, total});
+            std::fill(mask.data(), mask.data() + total * total, ggml_fp32_to_fp16(0.f));
+            int64_t col = txt_len + img_len;
+            for (size_t i = 0; i < ref_lens.size(); ++i) {
+                const float boost = i < boosts.size() ? boosts[i] : 1.f;
+                if (boost != 1.f) {
+                    const ggml_fp16_t bias = ggml_fp32_to_fp16(std::log(std::max(boost, 1e-4f)));
+                    for (int64_t row = txt_len; row < txt_len + img_len; ++row)
+                        std::fill(mask.data() + row * total + col, mask.data() + row * total + col + ref_lens[i], bias);
                 }
-                boost_mask_key_ = std::move(key);
+                col += ref_lens[i];
             }
-            return &boost_mask_;
+            return &boost_masks_.emplace(std::move(key), std::move(mask)).first->second;
+        }
+
+        // A mask is an F16 table of all tokens by all tokens (over 100 MB at 1024 x 1024 with one reference): none
+        // outlives the sampling run.
+        void runner_end() override {
+            boost_masks_.clear();
+            DiffusionModelRunner::runner_end();
         }
 
         Krea2Runner(ggml_backend_t backend,

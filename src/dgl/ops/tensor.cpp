@@ -328,6 +328,34 @@ namespace sd::dgl::ops {
         return output;
     }
 
+    // mode "area": each output pixel is the mean of the source pixels its cell covers, PyTorch's interpolate(mode="area")
+    // (adaptive average pooling: rows floor(i * in / out) to ceil((i + 1) * in / out)). Bytes are averaged and rounded.
+    template <typename T>
+    static sd::Tensor<T> interpolate_area(const sd::Tensor<T>& input, std::vector<int64_t> shape) {
+        const auto iw = input.shape()[0], ih = input.shape()[1];
+        const auto ow = shape[0], oh = shape[1];
+        sd::Tensor<T> output(std::move(shape));
+        parallel_for(0, output.numel() / ow, std::max<int64_t>(1, 16384 / ow), [&](int64_t begin, int64_t end) {
+            for (int64_t row = begin; row < end; ++row) {
+                const auto* plane = input.data() + row / oh * iw * ih;
+                const auto oy = row % oh, y0 = oy * ih / oh, y1 = ((oy + 1) * ih + oh - 1) / oh;
+                for (int64_t x = 0; x < ow; ++x) {
+                    const auto x0 = x * iw / ow, x1 = ((x + 1) * iw + ow - 1) / ow;
+                    double sum = 0.0;
+                    for (int64_t y = y0; y < y1; ++y)
+                        for (int64_t sx = x0; sx < x1; ++sx)
+                            sum += double(plane[y * iw + sx]);
+                    const double mean = sum / double((y1 - y0) * (x1 - x0));
+                    if constexpr (std::is_same_v<T, uint8_t>)
+                        output.data()[row * ow + x] = rounded_byte(mean);
+                    else
+                        output.data()[row * ow + x] = T(mean);
+                }
+            }
+        });
+        return output;
+    }
+
     std::shared_ptr<sd_tensor_t> interpolate_tensor(const sd_tensor_t& input, const std::vector<int64_t>& size, const std::vector<int64_t>& axes, const std::string& name, bool antialias) {
         if (size.size() != 2 || size[0] < 1 || size[1] < 1 || axes.size() != 2 || axes[0] == axes[1] || !input.bytes)
             throw std::runtime_error("interpolation requires a nonempty tensor, two positive sizes and two distinct axes");
@@ -336,6 +364,20 @@ namespace sd::dgl::ops {
         shape[x]   = size[0];
         shape[y]   = size[1];
         element_count(shape, input.type);
+        if (name == "area") {
+            auto resize = [&](auto tag) {
+                using T = decltype(tag);
+                return make_tensor(apply_spatial(input.as<T>(), x, y, [&](const sd::Tensor<T>& source) {
+                    auto target = source.shape();
+                    target[0]   = size[0];
+                    target[1]   = size[1];
+                    return interpolate_area(source, std::move(target));
+                }));
+            };
+            if (input.type == SD_TENSOR_U8)
+                return resize(uint8_t{});
+            return with_float_dtype(input.type, resize);
+        }
         using Mode = sd::ops::InterpolateMode;
         static const std::map<std::string, Mode> modes{
             {"nearest", Mode::Nearest},
